@@ -118,6 +118,7 @@ class Request:
     prompt_cache: Optional[List[Any]] = None  # Cached KV state from prefix cache
     cached_tokens: int = 0  # Number of tokens retrieved from cache
     remaining_tokens: Optional[List[int]] = None  # Tokens still needing processing
+    skip_prefill: bool = False  # True if 100% cache hit, skip prefill computation
 
     # Paged cache fields (for BlockAwarePrefixCache)
     block_table: Optional["BlockTable"] = None  # Block table for paged cache

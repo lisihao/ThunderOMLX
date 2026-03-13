@@ -117,6 +117,8 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
         # Per-UID VLM embeddings for batched prefill.
         # uid → (inputs_embeds, extra_kwargs, start_offset)
         self._vlm_pending: Dict[int, Tuple[mx.array, Dict[str, Any], int]] = {}
+        # Per-UID skip prefill flag (100% cache hit, skip forward pass)
+        self._skip_prefill_uids: Set[int] = set()
 
     # Cache class names known to be sliceable (no boundary snapshots needed).
     _KNOWN_SLICEABLE = frozenset({"KVCache", "BatchKVCache", "QuantizedKVCache"})
@@ -337,6 +339,23 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
             logits_processors,
             prompt_checkpoints,
         ) = zip(*prompts)
+
+        # Full Skip: Check if all UIDs in this batch have 100% cache hit
+        if uids and all(uid in self._skip_prefill_uids for uid in uids):
+            logger.info(
+                f"✨ [Full Skip Path] All {len(uids)} UIDs have 100% cache hit, "
+                f"skipping prefill computation entirely. UIDs: {list(uids)}"
+            )
+            # Clean up processed UIDs
+            for uid in uids:
+                self._skip_prefill_uids.discard(uid)
+                # Also clean up VLM embeddings if any
+                self._vlm_pending.pop(uid, None)
+
+            # Return early - no prefill computation needed
+            # The cache already contains all necessary KV state
+            # Just return empty/minimal result to signal completion
+            return
 
         lengths = [len(p) for p in inputs]
         max_length = max(lengths)
@@ -2228,7 +2247,7 @@ class Scheduler:
                 request.prompt_token_ids = list(request.prompt)
             request.num_prompt_tokens = len(request.prompt_token_ids)
 
-        # Check prefix cache for cached KV state
+        # Check prefix cache for cached KV state with Full Skip Logic
         if self.block_aware_cache is not None:
             # Use paged cache
             # Build extra_keys for VLM image hash prefix cache isolation
@@ -2236,11 +2255,35 @@ class Scheduler:
             if request.vlm_image_hash:
                 extra_keys = (request.vlm_image_hash,)
 
-            block_table, remaining = self.block_aware_cache.fetch_cache(
-                request.request_id,
+            # Use match_cache_with_skip_logic for Full Skip detection
+            cache_result = self.block_aware_cache.match_cache_with_skip_logic(
                 request.prompt_token_ids,
                 extra_keys=extra_keys,
             )
+
+            block_table = cache_result['block_table']
+            remaining = cache_result['remaining_tokens']
+            can_skip_prefill = cache_result['can_skip_prefill']
+            cache_hit_ratio = cache_result['cache_hit_ratio']
+            skip_reason = cache_result['skip_reason']
+
+            # Log skip decision
+            if can_skip_prefill:
+                logger.info(
+                    f"✨ FULL SKIP enabled for request {request.request_id}: "
+                    f"100% cache hit ({block_table.num_tokens} tokens), "
+                    f"skipping prefill computation"
+                )
+                # Mark request as ready for decode-only
+                request.skip_prefill = True
+            else:
+                request.skip_prefill = False
+                if cache_hit_ratio > 0:
+                    logger.debug(
+                        f"Request {request.request_id}: partial cache hit "
+                        f"({cache_hit_ratio*100:.1f}%), "
+                        f"prefill required for {len(remaining)} tokens"
+                    )
             if block_table and block_table.num_tokens > 0:
                 # Reconstruct actual KVCache objects from stored tensor data
                 # Note: reconstruct_cache may modify block_table in-place if
@@ -2588,7 +2631,21 @@ class Scheduler:
             # Note: Don't use `remaining_tokens or prompt_token_ids` because empty list
             # is falsy in Python. For exact cache match, remaining_tokens=[] but we should
             # pass just the last token so BatchGenerator can start generation.
-            if request.remaining_tokens is not None and len(request.remaining_tokens) == 0:
+
+            # Full Skip Logic: if 100% cache hit, we still need to insert into BatchGenerator
+            # but can optimize by skipping the actual prefill computation
+            # For now, we treat it the same as exact cache match (pass last token)
+            # The actual skip happens in the BatchGenerator/model forward pass
+            if getattr(request, 'skip_prefill', False):
+                # 100% cache hit - pass only last token for generation kickoff
+                # The cache contains state for all N tokens, we just need to start decode
+                tokens_to_process = request.prompt_token_ids[-1:]
+                logger.info(
+                    f"✨ FULL SKIP: Request {request.request_id} ready for decode, "
+                    f"100% cache reuse ({request.cached_tokens} tokens), "
+                    f"passing last token for generation kickoff"
+                )
+            elif request.remaining_tokens is not None and len(request.remaining_tokens) == 0:
                 # Exact cache match - pass only last token for generation kickoff
                 tokens_to_process = request.prompt_token_ids[-1:]
             elif request.remaining_tokens:
@@ -2666,6 +2723,15 @@ class Scheduler:
                         request.vlm_extra_kwargs or {},
                         request.cached_tokens,
                     )
+
+                # Record skip_prefill UID (100% cache hit, skip forward pass)
+                if getattr(request, 'skip_prefill', False):
+                    self.batch_generator._skip_prefill_uids.add(uid)
+                    logger.info(
+                        f"✨ [Full Skip] UID {uid} registered for skip prefill "
+                        f"(request {request.request_id}, {request.cached_tokens} cached tokens)"
+                    )
+
                 self.request_id_to_uid[request.request_id] = uid
                 self.uid_to_request_id[uid] = request.request_id
                 request.batch_uid = uid
