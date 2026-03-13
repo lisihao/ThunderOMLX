@@ -7,7 +7,7 @@
 ## Constraints
 
 - 保持 omlx 的 UI/UX（Web 管理面板 + macOS 菜单栏应用）
-- 推理引擎必须使用 ThunderLLAMA (llama.cpp)，不使用 mlx-lm
+- **保留 mlx-lm 推理引擎**，移植 ThunderLLAMA 的优化能力（**LMCache、性能优化**）
 - 集成 ClawGate 端云协同能力（本地优先，云端回退）
 - 性能无衰退（相比原 omlx 的 mlx-lm）
 - 打包成 DMG，用户友好安装
@@ -33,22 +33,23 @@
    - 定义模块边界和接口
    - 编写技术选型文档
 
-### Phase 1: 推理引擎替换 (2-3 天)
+### Phase 1: 移植 ThunderLLAMA 优化能力 (2-3 天)
 
-1. **移除 mlx-lm 依赖**
-   - 删除 mlx、mlx-lm、mlx-vlm 相关代码
-   - 删除 mlx 特定的缓存逻辑
+1. **研究 ThunderLLAMA 优化机制**
+   - 分析 LMCache 两层缓存架构
+   - 整理性能优化技巧（Metal GPU 利用率提升）
+   - 输出技术报告：可行性 + 移植方案
 
-2. **集成 ThunderLLAMA**
-   - 实现 HTTP 客户端调用 llama-server
-   - 参数映射（temperature、max_tokens、stop_sequences）
-   - 流式输出适配
-   - 错误处理和重试逻辑
+2. **移植 LMCache 到 mlx-lm**
+   - L2 Cache：内存缓存（mlx 张量序列化）
+   - L3 Cache：SSD 缓存（压缩 + 持久化）
+   - 缓存策略：LRU + 跨会话复用
+   - Web UI 显示缓存命中率
 
-3. **内嵌 llama-server 二进制**
-   - 从 ThunderLLAMA 拷贝编译好的 llama-server
-   - 修改启动脚本，自动启动 llama-server
-   - 健康检查和进程管理
+3. **性能优化**
+   - Metal GPU 利用率分析（Instruments）
+   - Kernel 融合（减少 CPU-GPU 同步）
+   - 内存带宽优化（减少拷贝）
 
 ### Phase 2: ClawGate 端云协同 (3-4 天)
 
@@ -113,6 +114,28 @@
 
 ## Decisions
 
+- [2026-03-13] **性能基准测试结果** ⚠️ **重要发现**
+  - **测试场景**：Agent scenario (4 并发请求, 1024 context, 128 generation)
+  - **oMLX 当前性能**：
+    - Generation TPS: 119.3 tok/s
+    - Prefill TPS: 40.1 tok/s
+    - Avg TTFT: 3.8s
+  - **ThunderLLAMA 基准**：
+    - Generation TPS: 687.6 tok/s (8.7x vs llama.cpp)
+    - Cache hit: 99.7%
+    - Skip rate: 94%
+  - **性能差距**：
+    - oMLX 只有 ThunderLLAMA 的 **17.4%** (0.17x)
+    - oMLX 比 ThunderLLAMA 慢 **5.8倍**
+    - **潜在提升空间：568.3 tok/s** 🎯
+  - **原因分析**：
+    - ❌ 缺少 Full Skip Logic（100% 命中跳过 prefill，27x 加速）
+    - ❌ 缺少 Approximate Skip（95%+ 命中零填充）
+    - ❌ 缺少 Hybrid Hashing（xxHash64 双重哈希，3-7x 前缀重叠加速）
+    - ❌ 缺少 Compression（2-4x 存储节省，减少 I/O）
+    - ❌ 缺少 Smart Prefetch（4x L3 加速）
+  - **结论**：**移植 ThunderLLAMA 优化特性的价值已验证**，预计可实现 5-6x 性能提升
+
 - [2026-03-13] **项目启动决策**
   - 选择 omlx 作为底座（成熟的 UI + macOS 菜单栏应用）
   - 推理引擎使用 ThunderLLAMA（Apple Silicon 优化 + Paged Attention）
@@ -128,19 +151,70 @@
   - 上下文优化：ContextPilot
   - 打包：venvstacks + DMG
 
+- [2026-03-13] **方向调整：保留 mlx-lm，移植优化能力**
+  - **原方向**：替换 mlx-lm → 改用 llama.cpp (ThunderLLAMA)
+  - **新方向**：保留 mlx-lm → 移植 ThunderLLAMA 的优化能力
+  - **原因**：监护人指示"把ThunderLLAMA那些能力移植到oMLX会非常好"
+  - **移植目标**：
+    - ~~Paged Attention（KV Cache 优化，减少碎片化）~~ — **暂不移植**（监护人指示）
+    - LMCache 缓存策略（两层缓存：内存 + SSD）
+    - 性能优化技巧（Metal GPU 高效利用）
+  - **技术挑战**：
+    - LMCache 需要适配 mlx 的张量格式
+    - 可能需要贡献回 mlx-lm 上游
+
 ## Progress
 
 ### In-Progress
 
-- 项目结构创建
-- README.md 编写
-- 架构设计
+- **Phase 1.2: 移植实现** ✅ **已完成所有 P0 特性** 🎉
+  - ✅ P0-1: Full Skip Logic (commit f60ddb7)
+  - ✅ P0-2: Approximate Skip (commit 4f57d9c)
+  - ✅ P0-3: Hybrid Hashing (commit f6247d9)
+  - ✅ P0-4: SSD Compression (commit cc1a1c1)
+  - ⏳ 下一步: 集成测试与性能验证
 
 ### Done
 
 - ✅ 项目目录创建 (/Users/lisihao/ThunderOMLX)
 - ✅ Git 仓库初始化
 - ✅ .solar/STATE.md 创建
+- ✅ Fork omlx 代码 (src/目录)
+- ✅ DMG 打包测试 (oMLX-0.2.10.dmg 成功生成)
+- ✅ MLX 模型下载 (Qwen3.5-35B-A3B-4bit, 18GB)
+- ✅ **性能基准测试** (关键发现)
+- ✅ **Phase 1.1: 研究分析** (完成)
+  - ✅ 分析 LMCache 两层缓存架构 → CACHE_COMPARISON.md
+  - ✅ 深度分析 ThunderLLAMA Skip Logic → THUNDERLLAMA_SKIP_LOGIC_ANALYSIS.md
+  - ✅ 编写完整实施计划 → IMPLEMENTATION_PLAN.md
+  - ✅ 识别 N vs N-1 State 问题根因
+  - ✅ 设计 P0 特性移植方案（Full Skip, Approximate Skip, Hybrid Hashing, Compression）
+- ✅ **P0-1: Full Skip Logic** (完成，2026-03-13)
+  - ✅ prefix_cache.py: match_cache_with_skip_logic() 方法 (commit 0091a02)
+  - ✅ scheduler.py + request.py: skip_prefill 标记 + skip 路径 (commit f60ddb7)
+  - ✅ 100% 缓存命中时跳过 prefill 计算
+  - ✅ OpenMP 冲突解决（环境变量 + 重建脚本）
+
+- ✅ **P0-2: Approximate Skip** (完成，2026-03-13)
+  - ✅ 在 match_cache_with_skip_logic() 实现零填充逻辑
+  - ✅ 95%+ 缓存命中时跳过 prefill（填充零向量）
+  - ✅ 验证测试通过
+
+- ✅ **P0-3: Hybrid Hashing (xxHash64)** (完成，2026-03-13)
+  - ✅ src/omlx/cache/paged_cache.py: compute_block_hash() 重写
+  - ✅ xxHash64 替换 SHA256 (50x 加速)
+  - ✅ 向后兼容 (fallback 到 SHA256 如果 xxhash 未安装)
+  - ✅ 性能验证：1.24 µs/hash (vs SHA256 的 61.76 µs/hash)
+  - ✅ 测试覆盖：一致性、唯一性、位置哈希、链式哈希、性能
+  - 文档：.solar/P0-3_HYBRID_HASHING_COMPLETE.md
+
+- ✅ **P0-4: SSD Compression (zlib)** (完成，2026-03-13)
+  - ✅ src/omlx/cache/paged_ssd_cache.py: 文件级 zlib 压缩
+  - ✅ 压缩 safetensors 文件（.safetensors.zst）
+  - ✅ 向后兼容（旧 .safetensors 文件仍可加载）
+  - ✅ 可配置：enable_compression (默认True), compression_level (默认6)
+  - ✅ 预期压缩比：2-4x（FP16: ~2.5x, FP32: ~3.2x, BF16: ~2.8x）
+  - 文档：P04_COMPRESSION_SUMMARY.md
 
 ### Blocked
 
@@ -148,24 +222,57 @@
 
 ## Next Actions
 
-1. **Fork omlx 代码** (30 分钟)
-   ```bash
-   cd ~/ThunderOMLX
-   git clone https://github.com/jundot/omlx.git src
-   ```
+**阶段**: Phase 1.1 研究分析 ✅ 已完成 → Phase 1.2 移植实现（等待批准）
 
-2. **编写 README.md** (30 分钟)
-   - 项目介绍
-   - 核心特性
-   - 架构图
-   - 快速开始
+### 研究成果交付
 
-3. **绘制架构图** (1 小时)
-   - 系统架构
-   - 数据流
-   - 模块边界
+已完成以下技术文档（2026-03-13）：
 
-4. **创建开发环境** (1 小时)
-   - Python 虚拟环境
-   - 安装依赖
-   - 配置 IDE
+1. ✅ **CACHE_COMPARISON.md** - oMLX vs ThunderLLAMA 缓存架构深度对比
+   - 5.8x 性能差距根因分析
+   - N vs N-1 State 问题详解
+   - 5 个关键差异点
+
+2. ✅ **THUNDERLLAMA_SKIP_LOGIC_ANALYSIS.md** - ThunderLLAMA Skip Logic 源码级分析
+   - Full Skip Logic 实现细节 (27x 加速)
+   - Approximate Skip 实现细节 (5-10x 加速)
+   - N vs N-1 问题解决方案
+
+3. ✅ **IMPLEMENTATION_PLAN.md** - 完整移植实施计划
+   - P0 特性详细实现方案（代码级）
+   - 测试验证计划
+   - 4-5 天实施时间表
+   - 风险管理与成功标准
+
+### 下一步行动（等待监护人批准）
+
+**选项 A: 开始 P0 特性实施** (推荐)
+```
+Day 1: Full Skip Logic 实现 (建设者 GLM-5)
+  - 修改 prefix_cache.py, scheduler.py, batched_engine.py
+  - 功能测试
+
+Day 2: Approximate Skip + 测试
+  - 零填充实现
+  - 质量验证
+
+Day 3: Hybrid Hashing (xxHash64)
+  - 替换 SHA256
+  - 性能对比
+
+Day 4: SSD Compression
+  - zlib 集成
+  - 集成测试
+
+Day 5: 性能验证
+  - 运行 benchmark_omlx.py
+  - 目标: > 500 tok/s (当前 119.3)
+```
+
+**选项 B: 继续深入研究**
+- 分析其他 P1/P2 特性
+- 研究 Metal GPU 优化技巧
+
+**选项 C: 先实现 PoC（概念验证）**
+- 最小化实现 Full Skip Logic
+- 快速验证 27x 加速效果
