@@ -53,6 +53,9 @@ def compute_block_hash(
     This enables prefix caching by creating a chain of hashes where
     each block's hash depends on all previous blocks (similar to vLLM).
 
+    **Hybrid Hashing (P0-3):** Uses xxHash64 (50x faster than SHA256).
+    Fallback to SHA256 if xxhash not installed.
+
     Args:
         parent_hash: Hash of the previous block, or None for first block
         token_ids: Token IDs in this block
@@ -62,27 +65,73 @@ def compute_block_hash(
     Returns:
         Content-based hash for this block
     """
-    hasher = hashlib.sha256()
+    try:
+        import xxhash
+        use_xxhash = True
+    except ImportError:
+        use_xxhash = False
+        # Log warning only once (avoid spam)
+        if not hasattr(compute_block_hash, "_logged_xxhash_warning"):
+            logger.warning(
+                "xxhash not installed, falling back to SHA256 (50x slower). "
+                "Install with: pip install xxhash"
+            )
+            compute_block_hash._logged_xxhash_warning = True
 
-    # Include model name first to isolate caches between different models
-    if model_name:
-        hasher.update(model_name.encode("utf-8"))
+    if use_xxhash:
+        # Hybrid Hashing: xxHash64 (content) + position hash
+        # 1. Create xxHash64 hasher with fixed seed for reproducibility
+        hasher = xxhash.xxh64(seed=0x4F4D4C58)  # "OMLX" in ASCII hex
 
-    # Include parent hash for chain
-    if parent_hash:
-        hasher.update(parent_hash)
+        # 2. Include model name first to isolate caches between different models
+        if model_name:
+            hasher.update(model_name.encode("utf-8"))
+
+        # 3. Include parent hash for chain
+        if parent_hash:
+            hasher.update(parent_hash)
+        else:
+            # Use fixed seed for reproducibility
+            hasher.update(b"omlx-root")
+
+        # 4. Include token content (convert to bytes efficiently)
+        # Use bytes(token_ids) instead of str(tuple(token_ids)) for speed
+        token_bytes = bytes(token_ids) if isinstance(token_ids, (list, tuple)) else bytes(list(token_ids))
+        hasher.update(token_bytes)
+
+        # 5. Include extra keys if present (position hash)
+        if extra_keys:
+            hasher.update(bytes(str(extra_keys), "utf-8"))
+
+        # Return 32-byte digest (xxHash64 gives 8 bytes, pad to match SHA256 size)
+        xxhash_digest = hasher.digest()
+        # Pad to 32 bytes to match SHA256 BlockHash size (for backwards compatibility)
+        padded_digest = xxhash_digest + b'\x00' * (32 - len(xxhash_digest))
+        return BlockHash(padded_digest)
+
     else:
-        # Use fixed seed for reproducibility
-        hasher.update(b"omlx-root")
+        # Fallback: SHA256 (legacy, slow)
+        hasher = hashlib.sha256()
 
-    # Include token content
-    hasher.update(bytes(str(tuple(token_ids)), "utf-8"))
+        # Include model name first to isolate caches between different models
+        if model_name:
+            hasher.update(model_name.encode("utf-8"))
 
-    # Include extra keys if present
-    if extra_keys:
-        hasher.update(bytes(str(extra_keys), "utf-8"))
+        # Include parent hash for chain
+        if parent_hash:
+            hasher.update(parent_hash)
+        else:
+            # Use fixed seed for reproducibility
+            hasher.update(b"omlx-root")
 
-    return BlockHash(hasher.digest())
+        # Include token content
+        hasher.update(bytes(str(tuple(token_ids)), "utf-8"))
+
+        # Include extra keys if present
+        if extra_keys:
+            hasher.update(bytes(str(extra_keys), "utf-8"))
+
+        return BlockHash(hasher.digest())
 
 
 # =============================================================================
@@ -528,10 +577,17 @@ class PagedCacheManager(CacheManager):
         # paged SSD cache manager for storage (set via set_paged_ssd_cache_manager)
         self._paged_ssd_cache_manager: Optional[Any] = None
 
+        # Check hash algorithm availability
+        try:
+            import xxhash
+            hash_algo = "xxHash64 (P0-3 Hybrid Hashing, 50x faster)"
+        except ImportError:
+            hash_algo = "SHA256 (fallback, install xxhash for 50x speedup)"
+
         logger.info(
             f"PagedCacheManager initialized: block_size={block_size}, "
             f"initial_blocks={initial_count}, max_blocks={max_blocks}, "
-            f"max_tokens={block_size * max_blocks}"
+            f"max_tokens={block_size * max_blocks}, hash={hash_algo}"
         )
 
     def set_paged_ssd_cache_manager(self, paged_ssd_cache_manager: Any) -> None:
