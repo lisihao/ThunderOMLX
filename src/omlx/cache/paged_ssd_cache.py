@@ -530,6 +530,8 @@ class PagedSSDCacheManager(CacheManager):
         cache_dir: Path,
         max_size_bytes: int,
         hot_cache_max_bytes: int = 0,
+        enable_compression: bool = True,
+        compression_level: int = 6,
     ):
         """
         Initialize the SSD cache manager.
@@ -539,11 +541,17 @@ class PagedSSDCacheManager(CacheManager):
             max_size_bytes: Maximum total size of SSD cache.
             hot_cache_max_bytes: Maximum in-memory hot cache size in bytes.
                 0 means disabled (default).
+            enable_compression: Enable zlib compression for safetensors files.
+                Default True (2-4x storage savings).
+            compression_level: zlib compression level (1-9, default 6).
+                Higher = better compression, slower.
         """
         self._cache_dir = Path(cache_dir)
         self._max_size = max_size_bytes
         self._index = PagedSSDCacheIndex(max_size_bytes)
         self._lock = threading.RLock()
+        self.enable_compression = enable_compression
+        self.compression_level = compression_level
 
         # Disk usage cache for dynamic effective max size (30s TTL)
         self._disk_usage_cache = None  # type: shutil._ntuple_diskusage | None
@@ -735,11 +743,12 @@ class PagedSSDCacheManager(CacheManager):
             block_hash: Block content hash.
 
         Returns:
-            Path to the safetensors file.
+            Path to the safetensors file (compressed or uncompressed).
         """
         hash_hex = block_hash.hex()
         subdir = hash_hex[0]  # First character
-        filename = f"{hash_hex}.safetensors"
+        ext = ".safetensors.zst" if self.enable_compression else ".safetensors"
+        filename = f"{hash_hex}{ext}"
         return self._cache_dir / subdir / filename
 
     def _scan_existing_files(self) -> None:
@@ -863,8 +872,31 @@ class PagedSSDCacheManager(CacheManager):
                     str(temp_path), tensors_raw, metadata
                 )
 
-                # Atomic rename to final path
-                os.rename(str(temp_path), str(file_path))
+                # P0-4: Compress with zlib if enabled
+                if self.enable_compression:
+                    import zlib
+
+                    with open(temp_path, 'rb') as f:
+                        raw_data = f.read()
+                    raw_size = len(raw_data)
+
+                    compressed_data = zlib.compress(raw_data, level=self.compression_level)
+                    compressed_size = len(compressed_data)
+
+                    with open(file_path, 'wb') as f:
+                        f.write(compressed_data)
+
+                    temp_path.unlink()
+                    actual_size = compressed_size
+
+                    logger.debug(
+                        f"Compressed block {block_hash.hex()[:16]}: "
+                        f"{raw_size} → {compressed_size} bytes "
+                        f"({compressed_size / raw_size * 100:.1f}%)"
+                    )
+                else:
+                    # Atomic rename to final path
+                    os.rename(str(temp_path), str(file_path))
 
                 # Update index with actual file size
                 self._index.update_file_size(block_hash, actual_size)
@@ -1282,7 +1314,25 @@ class PagedSSDCacheManager(CacheManager):
             # Previous executor-based approach caused deadlocks when
             # mx.load() in a worker thread contested Metal GPU resources
             # with the main inference thread.
-            arrays, file_metadata = mx.load(str(file_path), return_metadata=True)
+
+            # P0-4: Decompress if file is compressed (.zst extension)
+            if file_path.suffix == '.zst':
+                import zlib
+                import tempfile
+
+                with open(file_path, 'rb') as f:
+                    compressed_data = f.read()
+
+                raw_data = zlib.decompress(compressed_data)
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.safetensors') as tmp:
+                    tmp.write(raw_data)
+                    temp_path_str = tmp.name
+
+                arrays, file_metadata = mx.load(temp_path_str, return_metadata=True)
+                Path(temp_path_str).unlink()
+            else:
+                arrays, file_metadata = mx.load(str(file_path), return_metadata=True)
 
             # Get layer_cache_types for CacheList detection
             layer_cache_types = metadata.layer_cache_types
