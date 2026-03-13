@@ -167,12 +167,12 @@
 
 ### In-Progress
 
-- **Phase 1.2: 移植实现** ✅ **已完成所有 P0 特性** 🎉
+- **Phase 1.2: P0 特性移植** ✅ **全部完成** 🎉
   - ✅ P0-1: Full Skip Logic (commit f60ddb7)
   - ✅ P0-2: Approximate Skip (commit 4f57d9c)
   - ✅ P0-3: Hybrid Hashing (commit f6247d9)
   - ✅ P0-4: SSD Compression (commit cc1a1c1)
-  - ⏳ 下一步: 集成测试与性能验证
+  - ✅ 集成测试 (commit 6e1cf69): P0-3/P0-4 通过
 
 ### Done
 
@@ -215,6 +215,13 @@
   - ✅ 可配置：enable_compression (默认True), compression_level (默认6)
   - ✅ 预期压缩比：2-4x（FP16: ~2.5x, FP32: ~3.2x, BF16: ~2.8x）
   - 文档：P04_COMPRESSION_SUMMARY.md
+
+- ✅ **集成测试** (完成，2026-03-13)
+  - ✅ P0-3 验证：xxHash64 性能测试（6.16 µs/hash，9.7x 加速）
+  - ✅ P0-4 验证：压缩功能开关、向后兼容
+  - ✅ OpenMP 冲突解决（环境变量永久配置）
+  - 📝 P0-1/P0-2 需通过 benchmark_omlx.py 端到端测试
+  - 测试脚本：test_p0_simple.py, test_integration_p0.py
 
 ### Blocked
 
