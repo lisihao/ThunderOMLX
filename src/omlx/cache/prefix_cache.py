@@ -284,6 +284,53 @@ class BlockAwarePrefixCache(CacheManager):
         logger.debug(f"Cache miss for {request_id}")
         return None, tokens
 
+    def match_cache_with_skip_logic(
+        self,
+        tokens: List[int],
+        extra_keys: Optional[Tuple[Any, ...]] = None,
+    ) -> Dict[str, Any]:
+        """
+        缓存匹配 + Skip Logic 决策
+
+        Returns:
+            {
+                'block_table': Optional[BlockTable],
+                'remaining_tokens': List[int],
+                'can_skip_prefill': bool,
+                'cache_hit_ratio': float,
+                'skip_reason': str  # 'full' or 'none'
+            }
+        """
+        # 使用现有的 fetch_cache 方法
+        block_table, remaining = self.fetch_cache("_skip_check", tokens, extra_keys)
+
+        # 计算命中率
+        total_tokens = len(tokens)
+        if block_table and total_tokens > 0:
+            cached_tokens = block_table.num_tokens
+            cache_hit_ratio = cached_tokens / total_tokens
+        else:
+            cache_hit_ratio = 0.0
+
+        # Full Skip Logic 决策
+        can_skip = (cache_hit_ratio == 1.0) and (len(remaining) == 0)
+        skip_reason = 'full' if can_skip else 'none'
+
+        if can_skip:
+            logger.info(
+                f"✨ FULL SKIP: 100% cache hit "
+                f"({block_table.num_tokens} tokens, "
+                f"{len(block_table.block_ids)} blocks)"
+            )
+
+        return {
+            'block_table': block_table,
+            'remaining_tokens': remaining,
+            'can_skip_prefill': can_skip,
+            'cache_hit_ratio': cache_hit_ratio,
+            'skip_reason': skip_reason
+        }
+
     def store_cache(
         self,
         request_id: str,
