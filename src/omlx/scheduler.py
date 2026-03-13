@@ -2265,19 +2265,32 @@ class Scheduler:
             remaining = cache_result['remaining_tokens']
             can_skip_prefill = cache_result['can_skip_prefill']
             cache_hit_ratio = cache_result['cache_hit_ratio']
-            skip_reason = cache_result['skip_reason']
+            skip_reason = cache_result.get('skip_reason', 'none')
+            approx_zero_fill_count = cache_result.get('approx_zero_fill_count', 0)
 
             # Log skip decision
             if can_skip_prefill:
-                logger.info(
-                    f"✨ FULL SKIP enabled for request {request.request_id}: "
-                    f"100% cache hit ({block_table.num_tokens} tokens), "
-                    f"skipping prefill computation"
-                )
-                # Mark request as ready for decode-only
                 request.skip_prefill = True
+                request.skip_reason = skip_reason
+                request.approx_zero_fill_count = approx_zero_fill_count
+
+                if skip_reason == 'full':
+                    logger.info(
+                        f"✨ FULL SKIP enabled for request {request.request_id}: "
+                        f"100% cache hit ({block_table.num_tokens} tokens), "
+                        f"skipping prefill computation"
+                    )
+                elif skip_reason == 'approximate':
+                    logger.info(
+                        f"⚡ APPROXIMATE SKIP enabled for request {request.request_id}: "
+                        f"{cache_hit_ratio:.1%} cache hit "
+                        f"({block_table.num_tokens}/{len(request.prompt_token_ids)} tokens), "
+                        f"zero-filling {approx_zero_fill_count} tokens"
+                    )
             else:
                 request.skip_prefill = False
+                request.skip_reason = 'none'
+                request.approx_zero_fill_count = 0
                 if cache_hit_ratio > 0:
                     logger.debug(
                         f"Request {request.request_id}: partial cache hit "
@@ -2632,18 +2645,27 @@ class Scheduler:
             # is falsy in Python. For exact cache match, remaining_tokens=[] but we should
             # pass just the last token so BatchGenerator can start generation.
 
-            # Full Skip Logic: if 100% cache hit, we still need to insert into BatchGenerator
-            # but can optimize by skipping the actual prefill computation
-            # For now, we treat it the same as exact cache match (pass last token)
-            # The actual skip happens in the BatchGenerator/model forward pass
-            if getattr(request, 'skip_prefill', False):
-                # 100% cache hit - pass only last token for generation kickoff
+            # Skip Logic: handle Full Skip and Approximate Skip
+            skip_reason = getattr(request, 'skip_reason', 'none')
+
+            if skip_reason == 'full':
+                # Full Skip: 100% cache hit - pass only last token for generation kickoff
                 # The cache contains state for all N tokens, we just need to start decode
                 tokens_to_process = request.prompt_token_ids[-1:]
                 logger.info(
                     f"✨ FULL SKIP: Request {request.request_id} ready for decode, "
                     f"100% cache reuse ({request.cached_tokens} tokens), "
                     f"passing last token for generation kickoff"
+                )
+            elif skip_reason == 'approximate':
+                # Approximate Skip: 95%+ cache hit - pass remaining tokens (will be zero-filled)
+                # The remaining tokens will be processed with zero vectors instead of computation
+                tokens_to_process = request.remaining_tokens
+                approx_count = getattr(request, 'approx_zero_fill_count', len(request.remaining_tokens))
+                logger.info(
+                    f"⚡ APPROXIMATE SKIP: Request {request.request_id}, "
+                    f"{request.cached_tokens}/{len(request.prompt_token_ids)} tokens cached, "
+                    f"zero-filling {approx_count} tokens (skipping heavy computation)"
                 )
             elif request.remaining_tokens is not None and len(request.remaining_tokens) == 0:
                 # Exact cache match - pass only last token for generation kickoff
@@ -2724,13 +2746,21 @@ class Scheduler:
                         request.cached_tokens,
                     )
 
-                # Record skip_prefill UID (100% cache hit, skip forward pass)
+                # Record skip_prefill UID (Full Skip or Approximate Skip)
+                skip_reason = getattr(request, 'skip_reason', 'none')
                 if getattr(request, 'skip_prefill', False):
                     self.batch_generator._skip_prefill_uids.add(uid)
-                    logger.info(
-                        f"✨ [Full Skip] UID {uid} registered for skip prefill "
-                        f"(request {request.request_id}, {request.cached_tokens} cached tokens)"
-                    )
+                    if skip_reason == 'full':
+                        logger.info(
+                            f"✨ [Full Skip] UID {uid} registered for skip prefill "
+                            f"(request {request.request_id}, {request.cached_tokens} cached tokens)"
+                        )
+                    elif skip_reason == 'approximate':
+                        logger.info(
+                            f"⚡ [Approximate Skip] UID {uid} registered for approximate skip "
+                            f"(request {request.request_id}, {request.cached_tokens} cached tokens, "
+                            f"zero-filling {request.approx_zero_fill_count} tokens)"
+                        )
 
                 self.request_id_to_uid[request.request_id] = uid
                 self.uid_to_request_id[uid] = request.request_id

@@ -119,6 +119,8 @@ class Request:
     cached_tokens: int = 0  # Number of tokens retrieved from cache
     remaining_tokens: Optional[List[int]] = None  # Tokens still needing processing
     skip_prefill: bool = False  # True if 100% cache hit, skip prefill computation
+    skip_reason: str = 'none'  # 'full' | 'approximate' | 'none'
+    approx_zero_fill_count: int = 0  # Number of tokens to zero-fill in approximate skip
 
     # Paged cache fields (for BlockAwarePrefixCache)
     block_table: Optional["BlockTable"] = None  # Block table for paged cache

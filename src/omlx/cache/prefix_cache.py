@@ -288,9 +288,15 @@ class BlockAwarePrefixCache(CacheManager):
         self,
         tokens: List[int],
         extra_keys: Optional[Tuple[Any, ...]] = None,
+        approx_threshold: float = 0.95,
     ) -> Dict[str, Any]:
         """
-        缓存匹配 + Skip Logic 决策
+        缓存匹配 + Skip Logic 决策 (支持 Full Skip 和 Approximate Skip)
+
+        Args:
+            tokens: Token sequence to match
+            extra_keys: Optional extra keys for cache isolation (e.g., VLM image hash)
+            approx_threshold: Threshold for approximate skip (default 0.95 = 95%)
 
         Returns:
             {
@@ -298,7 +304,8 @@ class BlockAwarePrefixCache(CacheManager):
                 'remaining_tokens': List[int],
                 'can_skip_prefill': bool,
                 'cache_hit_ratio': float,
-                'skip_reason': str  # 'full' or 'none'
+                'skip_reason': str,  # 'full' | 'approximate' | 'none'
+                'approx_zero_fill_count': int  # Number of tokens to zero-fill
             }
         """
         # 使用现有的 fetch_cache 方法
@@ -312,23 +319,48 @@ class BlockAwarePrefixCache(CacheManager):
         else:
             cache_hit_ratio = 0.0
 
-        # Full Skip Logic 决策
-        can_skip = (cache_hit_ratio == 1.0) and (len(remaining) == 0)
-        skip_reason = 'full' if can_skip else 'none'
+        # Skip Logic 决策
+        # 1. Full Skip: 100% cache hit
+        can_full_skip = (cache_hit_ratio == 1.0) and (len(remaining) == 0)
 
-        if can_skip:
+        # 2. Approximate Skip: 95%+ cache hit (but not 100%)
+        can_approx_skip = (
+            cache_hit_ratio >= approx_threshold and
+            cache_hit_ratio < 1.0 and
+            len(remaining) > 0
+        )
+
+        if can_full_skip:
+            skip_reason = 'full'
+            can_skip = True
+            approx_zero_fill_count = 0
             logger.info(
                 f"✨ FULL SKIP: 100% cache hit "
                 f"({block_table.num_tokens} tokens, "
                 f"{len(block_table.block_ids)} blocks)"
             )
+        elif can_approx_skip:
+            skip_reason = 'approximate'
+            can_skip = True
+            approx_zero_fill_count = len(remaining)
+            logger.info(
+                f"⚡ APPROXIMATE SKIP: {cache_hit_ratio:.1%} cache hit "
+                f"({cached_tokens}/{total_tokens} tokens, "
+                f"{len(block_table.block_ids)} blocks), "
+                f"zero-filling {approx_zero_fill_count} tokens"
+            )
+        else:
+            skip_reason = 'none'
+            can_skip = False
+            approx_zero_fill_count = 0
 
         return {
             'block_table': block_table,
             'remaining_tokens': remaining,
             'can_skip_prefill': can_skip,
             'cache_hit_ratio': cache_hit_ratio,
-            'skip_reason': skip_reason
+            'skip_reason': skip_reason,
+            'approx_zero_fill_count': approx_zero_fill_count
         }
 
     def store_cache(
