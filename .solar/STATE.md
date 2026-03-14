@@ -223,63 +223,65 @@
   - 📝 P0-1/P0-2 需通过 benchmark_omlx.py 端到端测试
   - 测试脚本：test_p0_simple.py, test_integration_p0.py
 
+- ✅ **Phase 1 (P1): SSD 缓存优化** (完成，2026-03-13)
+  - ✅ P1-5: Smart Prefetch - 智能预取（185x SSD 加速）
+  - ✅ P1-6: Checksum Validation - 数据完整性（XXH64，-3.3% 开销）
+  - ✅ P1-7: Adaptive Chunk Prefill - 自适应分块（4x-16x 内存优化）
+  - 文档：P1_FINAL_SUMMARY.md
+
+- ✅ **Phase 2 (P2): 块级缓存优化** (完成，2026-03-13)
+  - ✅ P2-8: AccessFrequencyTracker - 访问频率追踪（已完成于 P1-5）
+  - ✅ P2-9: LRU-2 Block-Level Cache Optimization - 块级缓存驱逐策略
+    - O(1) 操作复杂度
+    - COLD/HOT 两层队列分离
+    - 第 2 次访问触发 COLD→HOT 晋升
+    - 线程安全（RLock）
+    - 8/8 测试全部通过
+    - 文档：.solar/P2-9_DESIGN_V2.md
+
 ### Blocked
 
 (无)
 
 ## Next Actions
 
-**阶段**: Phase 1.1 研究分析 ✅ 已完成 → Phase 1.2 移植实现（等待批准）
+**阶段**: Phase 2 (P2) ✅ 已完成 → Phase 3: 推理引擎优化（待规划）
 
-### 研究成果交付
+### 已完成阶段总结
 
-已完成以下技术文档（2026-03-13）：
-
-1. ✅ **CACHE_COMPARISON.md** - oMLX vs ThunderLLAMA 缓存架构深度对比
-   - 5.8x 性能差距根因分析
-   - N vs N-1 State 问题详解
-   - 5 个关键差异点
-
-2. ✅ **THUNDERLLAMA_SKIP_LOGIC_ANALYSIS.md** - ThunderLLAMA Skip Logic 源码级分析
-   - Full Skip Logic 实现细节 (27x 加速)
-   - Approximate Skip 实现细节 (5-10x 加速)
-   - N vs N-1 问题解决方案
-
-3. ✅ **IMPLEMENTATION_PLAN.md** - 完整移植实施计划
-   - P0 特性详细实现方案（代码级）
-   - 测试验证计划
-   - 4-5 天实施时间表
-   - 风险管理与成功标准
+- ✅ **Phase 0**: 项目搭建（Git 仓库、目录结构、Fork omlx）
+- ✅ **Phase 1 (P1)**: SSD 缓存优化
+  - P1-5: Smart Prefetch（185x SSD 加速）
+  - P1-6: Checksum Validation（XXH64，数据完整性）
+  - P1-7: Adaptive Chunk Prefill（4x-16x 内存优化）
+- ✅ **Phase 2 (P2)**: 块级缓存优化
+  - P2-9: LRU-2 缓存驱逐策略（O(1) 操作，8/8 测试通过）
+- ✅ **P0 特性移植**: ThunderLLAMA 核心优化
+  - P0-1: Full Skip Logic（100% 缓存命中跳过 prefill）
+  - P0-2: Approximate Skip（95%+ 命中零填充）
+  - P0-3: Hybrid Hashing（xxHash64，50x 加速）
+  - P0-4: SSD Compression（zlib，2-4x 压缩比）
 
 ### 下一步行动（等待监护人批准）
 
-**选项 A: 开始 P0 特性实施** (推荐)
-```
-Day 1: Full Skip Logic 实现 (建设者 GLM-5)
-  - 修改 prefix_cache.py, scheduler.py, batched_engine.py
-  - 功能测试
+**Phase 3 候选方向**：
 
-Day 2: Approximate Skip + 测试
-  - 零填充实现
-  - 质量验证
+**选项 A: 端到端性能验证** (推荐)
+- 运行完整 benchmark 测试（P0-1 ~ P2-9 全部特性）
+- 验证性能提升目标（> 500 tok/s，当前 119.3）
+- 生成性能报告
 
-Day 3: Hybrid Hashing (xxHash64)
-  - 替换 SHA256
-  - 性能对比
+**选项 B: ClawGate 端云协同集成**
+- 集成 ClawGate 路由层
+- 本地优先，云端回退
+- 智能路由策略
 
-Day 4: SSD Compression
-  - zlib 集成
-  - 集成测试
+**选项 C: 性能优化深化**
+- Metal GPU 利用率分析
+- Kernel 融合优化
+- 内存带宽优化
 
-Day 5: 性能验证
-  - 运行 benchmark_omlx.py
-  - 目标: > 500 tok/s (当前 119.3)
-```
-
-**选项 B: 继续深入研究**
-- 分析其他 P1/P2 特性
-- 研究 Metal GPU 优化技巧
-
-**选项 C: 先实现 PoC（概念验证）**
-- 最小化实现 Full Skip Logic
-- 快速验证 27x 加速效果
+**选项 D: 打包分发准备**
+- venvstacks 配置
+- DMG 打包测试
+- 安装流程验证
