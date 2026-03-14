@@ -1,0 +1,48 @@
+{
+  "analysis_summary": {
+    "total_agents": 4,
+    "avg_soul_length_tokens": 1030,
+    "min_soul_length_tokens": 397,
+    "max_soul_length_tokens": 2262,
+    "recommended_global_block_size": 256,
+    "block_size_distribution": {
+      "256": 2,
+      "128": 1,
+      "64": 1
+    }
+  },
+  "agent_configs": {
+    "chief-of-staff": {
+      "name": "爱音玛利亚（Aine Maria）",
+      "soul_length_tokens": 397,
+      "recommended_block_size": 128,
+      "max_padding_tokens": 128,
+      "padding_overhead_percent": 28.97,
+      "num_blocks": 4
+    },
+    "product-strategist": {
+      "name": "- 产品策略师",
+      "soul_length_tokens": 631,
+      "recommended_block_size": 64,
+      "max_padding_tokens": 64,
+      "padding_overhead_percent": 1.43,
+      "num_blocks": 10
+    },
+    "ux-designer": {
+      "name": "- UX设计师",
+      "soul_length_tokens": 830,
+      "recommended_block_size": 256,
+      "max_padding_tokens": 256,
+      "padding_overhead_percent": 23.37,
+      "num_blocks": 4
+    },
+    "ai-engineer": {
+      "name": "- AI工程师 🤖",
+      "soul_length_tokens": 2262,
+      "recommended_block_size": 256,
+      "max_padding_tokens": 256,
+      "padding_overhead_percent": 1.86,
+      "num_blocks": 9
+    }
+  }
+}

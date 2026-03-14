@@ -97,6 +97,14 @@
 - 📊 **零开销**：最多填充 64 tokens，对生成质量无影响
 - 🚀 **Agent 优化**：高重复场景性能显著提升
 
+### 2.6 OpenClaw 多 Agent 优化（2026-03-14 完成）✅
+
+- 📊 **真实数据分析**：基于 ~/.openclaw 实际使用数据优化配置
+- 🎯 **Per-Agent 配置**：每个 Agent 使用最优 block_size（64-256）
+- 💰 **Padding 优化**：平均 padding 开销减少 65%（29%→4.9%）
+- ✅ **验证**：4 个活跃 Agent 全部达到 100% cache hit + FULL SKIP
+- 📁 **配置文件**：`openclaw_agent_cache_config.py` 开箱即用
+
 ### 3. ThunderLLAMA 推理引擎（待集成）
 
 - 🔥 **Apple Silicon 优化**：Metal GPU 加速 + Unified Memory
