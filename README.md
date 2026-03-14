@@ -233,12 +233,13 @@ ThunderOMLX/
 | 阶段 | 时间 | 状态 |
 |------|------|------|
 | Phase 0: 项目搭建 | 1 天 | ✅ 完成 |
-| **Phase 1: 缓存优化** | 3 天 | ✅ 完成 |
-| Phase 2: 推理引擎替换 | 2-3 天 | ⏸️ 待开始 |
-| Phase 3: ClawGate 集成 | 3-4 天 | ⏸️ 待开始 |
-| Phase 4: 性能优化 | 2-3 天 | ⏸️ 待开始 |
-| Phase 5: 打包分发 | 2-3 天 | ⏸️ 待开始 |
-| Phase 6: 文档和发布 | 1-2 天 | ⏸️ 待开始 |
+| **Phase 1: 缓存优化 (P1)** | 3 天 | ✅ 完成 |
+| **Phase 2: 缓存优化 (P2)** | 1 天 | ✅ 完成 |
+| Phase 3: 推理引擎替换 | 2-3 天 | ⏸️ 待开始 |
+| Phase 4: ClawGate 集成 | 3-4 天 | ⏸️ 待开始 |
+| Phase 5: 性能优化 | 2-3 天 | ⏸️ 待开始 |
+| Phase 6: 打包分发 | 2-3 天 | ⏸️ 待开始 |
+| Phase 7: 文档和发布 | 1-2 天 | ⏸️ 待开始 |
 
 ### ✅ Phase 1 完成成果（2026-03-13）
 
@@ -258,6 +259,19 @@ ThunderOMLX/
 - ✅ 动态 chunk size 计算
 
 **详细报告**: [P1_FINAL_SUMMARY.md](./P1_FINAL_SUMMARY.md)
+
+### ✅ Phase 2 完成成果（2026-03-13）
+
+**P2-9: LRU-2 Block-Level Cache Optimization** - 块级缓存优化
+- ✅ O(1) 操作复杂度（add, touch, evict per item）
+- ✅ COLD/HOT 两层队列分离（区分一次性访问 vs 重复访问）
+- ✅ 第 2 次访问触发 COLD→HOT 晋升
+- ✅ COLD 队列优先驱逐（保护热点数据）
+- ✅ 线程安全（RLock 并发控制）
+- ✅ 8/8 测试全部通过
+- ✅ Agent 场景验证（system prompt 保留在 HOT 队列）
+
+**详细设计**: [P2-9_DESIGN_V2.md](./.solar/P2-9_DESIGN_V2.md)
 
 ---
 
