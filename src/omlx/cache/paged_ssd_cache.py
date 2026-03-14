@@ -345,41 +345,64 @@ class PagedSSDBlockMetadata:
 
 class PagedSSDCacheIndex:
     """
-    In-memory index of SSD cache files.
+    In-memory index of SSD cache files with LRU-2 eviction strategy.
 
-    Provides O(1) lookup by block_hash and LRU tracking for size management.
-    Thread-safe for concurrent access.
+    LRU-2 Strategy:
+    - New blocks enter COLD queue (low priority)
+    - After 2nd access, promote to HOT queue (high priority)
+    - Eviction: COLD first (LRU order), then HOT (LRU order)
+
+    All operations are O(1) and thread-safe via RLock.
     """
 
     def __init__(self, max_size_bytes: int):
         """
-        Initialize the SSD cache index.
+        Initialize the SSD cache index with LRU-2 queues.
 
         Args:
             max_size_bytes: Maximum total size of SSD cache files.
         """
         self._index: Dict[bytes, PagedSSDBlockMetadata] = {}
-        self._lru: OrderedDict[bytes, float] = OrderedDict()
+
+        # LRU-2 queues (block_hash → last_access_time)
+        self._cold_queue: OrderedDict[bytes, float] = OrderedDict()  # Access count < 2
+        self._hot_queue: OrderedDict[bytes, float] = OrderedDict()   # Access count >= 2
+
+        # Access count tracking (block_hash → count)
+        self._access_counts: Dict[bytes, int] = {}
+
         self._total_size: int = 0
         self._max_size: int = max_size_bytes
         self._lock = threading.RLock()
 
+        # Statistics
+        self._stats = {
+            'cold_evictions': 0,
+            'hot_evictions': 0,
+            'promotions': 0,
+        }
+
     def add(self, metadata: PagedSSDBlockMetadata) -> None:
         """
-        Add a block to the index.
+        Add a new block to the index (enters COLD queue).
 
         Args:
             metadata: Block metadata to add.
         """
         with self._lock:
-            # Remove existing entry if present
-            if metadata.block_hash in self._index:
-                old_meta = self._index[metadata.block_hash]
-                self._total_size -= old_meta.file_size
-                del self._lru[metadata.block_hash]
+            block_hash = metadata.block_hash
 
-            self._index[metadata.block_hash] = metadata
-            self._lru[metadata.block_hash] = metadata.last_access
+            # Remove existing entry if present
+            if block_hash in self._index:
+                old_meta = self._index[block_hash]
+                self._total_size -= old_meta.file_size
+                self._cold_queue.pop(block_hash, None)
+                self._hot_queue.pop(block_hash, None)
+
+            # Add to index and COLD queue
+            self._index[block_hash] = metadata
+            self._cold_queue[block_hash] = metadata.last_access
+            self._access_counts[block_hash] = 1  # Initialize access count
             self._total_size += metadata.file_size
 
     def get(self, block_hash: bytes) -> Optional[PagedSSDBlockMetadata]:
@@ -397,7 +420,7 @@ class PagedSSDCacheIndex:
 
     def remove(self, block_hash: bytes) -> Optional[PagedSSDBlockMetadata]:
         """
-        Remove a block from the index.
+        Remove a block from the index and both queues.
 
         Args:
             block_hash: Block content hash.
@@ -409,27 +432,67 @@ class PagedSSDCacheIndex:
             if block_hash not in self._index:
                 return None
 
+            # Remove from index
             metadata = self._index.pop(block_hash)
-            del self._lru[block_hash]
             self._total_size -= metadata.file_size
+
+            # Remove from both queues (safe even if not present)
+            self._cold_queue.pop(block_hash, None)
+            self._hot_queue.pop(block_hash, None)
+
+            # Remove access count
+            self._access_counts.pop(block_hash, None)
+
             return metadata
 
     def touch(self, block_hash: bytes) -> None:
         """
-        Update last access time (move to end of LRU).
+        Update last access time and promote to HOT queue if needed.
+
+        LRU-2 Logic:
+        - 1st access (count=1): stay in COLD, move to MRU position
+        - 2nd access (count=2): promote COLD → HOT
+        - 3+ accesses: stay in HOT, move to MRU position
 
         Args:
             block_hash: Block content hash.
         """
         with self._lock:
-            if block_hash in self._index:
-                self._index[block_hash].touch()
-                self._lru.move_to_end(block_hash)
-                self._lru[block_hash] = self._index[block_hash].last_access
+            if block_hash not in self._index:
+                return
+
+            # Update metadata timestamp
+            self._index[block_hash].touch()
+            current_time = self._index[block_hash].last_access
+
+            # Increment access count
+            self._access_counts[block_hash] = self._access_counts.get(block_hash, 0) + 1
+            count = self._access_counts[block_hash]
+
+            if count == 2 and block_hash in self._cold_queue:
+                # 2nd access → promote COLD → HOT
+                del self._cold_queue[block_hash]
+                self._hot_queue[block_hash] = current_time
+                self._stats['promotions'] += 1
+                logger.debug(f"Promoted block {block_hash.hex()[:8]} COLD→HOT (accesses={count})")
+            elif block_hash in self._cold_queue:
+                # 1st access → move to MRU in COLD
+                self._cold_queue.move_to_end(block_hash)
+                self._cold_queue[block_hash] = current_time
+            elif block_hash in self._hot_queue:
+                # 3+ accesses → move to MRU in HOT
+                self._hot_queue.move_to_end(block_hash)
+                self._hot_queue[block_hash] = current_time
+            else:
+                # Edge case: block in index but not in queues (defensive)
+                logger.warning(f"Block {block_hash.hex()[:8]} not in any queue, adding to COLD")
+                self._cold_queue[block_hash] = current_time
 
     def get_lru_entries(self, count: int) -> List[PagedSSDBlockMetadata]:
         """
-        Get least recently used entries.
+        Get least recently used entries (for monitoring).
+
+        Returns entries from COLD queue first, then HOT queue.
 
         Args:
             count: Maximum number of entries to return.
@@ -439,14 +502,28 @@ class PagedSSDCacheIndex:
         """
         with self._lock:
             result = []
-            for block_hash in list(self._lru.keys())[:count]:
+
+            # Get from COLD queue first
+            for block_hash in list(self._cold_queue.keys())[:count]:
                 if block_hash in self._index:
                     result.append(self._index[block_hash])
+
+            # Get from HOT queue if needed
+            remaining = count - len(result)
+            if remaining > 0:
+                for block_hash in list(self._hot_queue.keys())[:remaining]:
+                    if block_hash in self._index:
+                        result.append(self._index[block_hash])
+
             return result
 
     def evict_until_size(self, target_size: int) -> List[PagedSSDBlockMetadata]:
         """
-        Evict LRU entries until total size is below target.
+        Evict blocks using LRU-2 strategy until total size is below target.
+
+        Eviction Priority:
+        1. COLD queue first (LRU order) - one-time access blocks
+        2. HOT queue second (LRU order) - frequently accessed blocks
 
         Args:
             target_size: Target total size in bytes.
@@ -456,12 +533,33 @@ class PagedSSDCacheIndex:
         """
         with self._lock:
             evicted = []
-            while self._total_size > target_size and self._lru:
-                # Get LRU entry (first in OrderedDict)
-                block_hash = next(iter(self._lru))
+
+            # Phase 1: Evict from COLD queue (low priority)
+            while self._total_size > target_size and self._cold_queue:
+                # Get LRU entry from COLD queue (first in OrderedDict)
+                block_hash = next(iter(self._cold_queue))
                 metadata = self.remove(block_hash)
                 if metadata:
                     evicted.append(metadata)
+                    self._stats['cold_evictions'] += 1
+                    logger.debug(
+                        f"Evicted COLD block {block_hash.hex()[:8]} "
+                        f"(size={metadata.file_size}, age={time.time() - metadata.last_access:.1f}s)"
+                    )
+
+            # Phase 2: Evict from HOT queue (high priority, only if needed)
+            while self._total_size > target_size and self._hot_queue:
+                # Get LRU entry from HOT queue (first in OrderedDict)
+                block_hash = next(iter(self._hot_queue))
+                metadata = self.remove(block_hash)
+                if metadata:
+                    evicted.append(metadata)
+                    self._stats['hot_evictions'] += 1
+                    logger.debug(
+                        f"Evicted HOT block {block_hash.hex()[:8]} "
+                        f"(size={metadata.file_size}, age={time.time() - metadata.last_access:.1f}s)"
+                    )
+
             return evicted
 
     def contains(self, block_hash: bytes) -> bool:
@@ -503,6 +601,33 @@ class PagedSSDCacheIndex:
         """Get all indexed block hashes."""
         with self._lock:
             return list(self._index.keys())
+
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get cache statistics including COLD/HOT queue info.
+
+        Returns:
+            Dictionary with cache stats:
+            - total_blocks: Total number of cached blocks
+            - cold_blocks: Number of blocks in COLD queue
+            - hot_blocks: Number of blocks in HOT queue
+            - total_size: Total size in bytes
+            - max_size: Maximum size in bytes
+            - cold_evictions: Number of COLD blocks evicted
+            - hot_evictions: Number of HOT blocks evicted
+            - promotions: Number of COLD→HOT promotions
+        """
+        with self._lock:
+            return {
+                'total_blocks': len(self._index),
+                'cold_blocks': len(self._cold_queue),
+                'hot_blocks': len(self._hot_queue),
+                'total_size': self._total_size,
+                'max_size': self._max_size,
+                'cold_evictions': self._stats['cold_evictions'],
+                'hot_evictions': self._stats['hot_evictions'],
+                'promotions': self._stats['promotions'],
+            }
 
 
 class PagedSSDCacheManager(CacheManager):
