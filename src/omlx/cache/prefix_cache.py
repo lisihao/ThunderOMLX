@@ -451,6 +451,11 @@ class BlockAwarePrefixCache(CacheManager):
         num_new_blocks = len(new_tokens) // self.block_size
         blocks_saved_to_ssd = 0
 
+        logger.info(
+            f"📊 store_cache: existing_tokens={existing_tokens}, new_tokens={len(new_tokens)}, "
+            f"block_size={self.block_size}, num_new_blocks={num_new_blocks}"
+        )
+
         for i in range(num_new_blocks):
             start_idx = i * self.block_size
             end_idx = min(start_idx + self.block_size, len(new_tokens))
@@ -507,6 +512,10 @@ class BlockAwarePrefixCache(CacheManager):
                 )
 
             # Extract tensor slice and save to paged SSD
+            logger.info(
+                f"🔍 SSD save check: is_tensor_data={is_tensor_data}, HAS_MLX={HAS_MLX}, "
+                f"paged_ssd_cache={'exists' if self.paged_ssd_cache is not None else 'None'}"
+            )
             if is_tensor_data and HAS_MLX and self.paged_ssd_cache is not None:
                 cache_seq_len = self._get_cache_seq_len(cache_data)
 
@@ -568,13 +577,14 @@ class BlockAwarePrefixCache(CacheManager):
                     )
                     if saved:
                         blocks_saved_to_ssd += 1
-                        logger.debug(
-                            f"Saved block {block.block_id} to tiered cache: "
-                            f"tokens [{global_start}:{global_end}], {len(block_kv_data)} layers"
+                        logger.info(
+                            f"💾 Saved block {block.block_id} to SSD cache: "
+                            f"tokens [{global_start}:{global_end}], {len(block_kv_data)} layers, "
+                            f"hash={block.block_hash.hex()[:16] if block.block_hash else 'none'}"
                         )
                     else:
                         logger.warning(
-                            f"Failed to save block {block.block_id} to tiered cache"
+                            f"⚠️ Failed to save block {block.block_id} to SSD cache (queue full or error)"
                         )
                         # Persistence failed: roll back metadata so we don't
                         # retain a block that cannot be reconstructed later.

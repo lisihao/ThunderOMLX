@@ -189,6 +189,11 @@ class PagedSSDCacheStats(BaseCacheStats):
     hot_cache_evictions: int = 0
     hot_cache_promotions: int = 0
 
+    # P1-6: Checksum validation metrics
+    checksum_verifications: int = 0
+    checksum_failures: int = 0
+    cached_verifications: int = 0  # Skipped re-verifications (optimization)
+
     @property
     def save_rate(self) -> float:
         """Calculate successful save rate."""

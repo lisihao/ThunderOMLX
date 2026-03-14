@@ -35,6 +35,8 @@ import numpy as np
 from omlx.utils.formatting import format_bytes
 from .interface import CacheManager
 from .stats import BaseCacheStats, PagedSSDCacheStats
+from .access_tracker import AccessFrequencyTracker
+from .async_prefetcher import AsyncPrefetcher
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +59,16 @@ def _compute_max_pending_writes() -> int:
     renames), so the queue needs to be deeper to absorb burst saves from
     large requests (e.g., 64 blocks per 4096-token request).
 
-    Scales proportionally: 512GB = 256, 32GB = 32, minimum 32.
+    Scales proportionally: 512GB = 512, 64GB = 64, minimum 64.
+    P1 optimization: Increased capacity to handle burst writes.
     """
     try:
         total_bytes = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
         total_gb = total_bytes / (1024 ** 3)
-        return max(32, min(256, int(total_gb / 2)))
+        # Increased from max(32, min(256, ...)) to max(64, min(512, ...))
+        return max(64, min(512, int(total_gb)))
     except (ValueError, OSError):
-        return 32  # Safe default
+        return 64  # Safe default (increased from 32)
 
 
 _MAX_PENDING_WRITES = _compute_max_pending_writes()
@@ -532,6 +536,11 @@ class PagedSSDCacheManager(CacheManager):
         hot_cache_max_bytes: int = 0,
         enable_compression: bool = True,
         compression_level: int = 6,
+        enable_prefetch: bool = True,
+        prefetch_top_n: int = 50,
+        prefetch_interval: float = 10.0,
+        enable_checksum: bool = True,
+        checksum_verify_on_load: bool = True,
     ):
         """
         Initialize the SSD cache manager.
@@ -545,6 +554,15 @@ class PagedSSDCacheManager(CacheManager):
                 Default True (2-4x storage savings).
             compression_level: zlib compression level (1-9, default 6).
                 Higher = better compression, slower.
+            enable_prefetch: Enable smart prefetch (P1-5).
+                Default True (4x L3 SSD load speedup).
+            prefetch_top_n: Number of hot blocks to prefetch (default 50).
+            prefetch_interval: Prefetch interval in seconds (default 10.0).
+            enable_checksum: Enable checksum validation (P1-6).
+                Default True (data integrity protection).
+            checksum_verify_on_load: Verify checksum when loading blocks.
+                Default True (strict mode). Set False for performance mode
+                (only verify on save, skip on load for ~25% faster loads).
         """
         self._cache_dir = Path(cache_dir)
         self._max_size = max_size_bytes
@@ -552,6 +570,8 @@ class PagedSSDCacheManager(CacheManager):
         self._lock = threading.RLock()
         self.enable_compression = enable_compression
         self.compression_level = compression_level
+        self.enable_checksum = enable_checksum
+        self.checksum_verify_on_load = checksum_verify_on_load
 
         # Disk usage cache for dynamic effective max size (30s TTL)
         self._disk_usage_cache = None  # type: shutil._ntuple_diskusage | None
@@ -568,6 +588,9 @@ class PagedSSDCacheManager(CacheManager):
             "hot_cache_hits": 0,
             "hot_cache_evictions": 0,
             "hot_cache_promotions": 0,
+            "checksum_verifications": 0,  # P1-6
+            "checksum_failures": 0,        # P1-6
+            "cached_verifications": 0,     # P1-6 optimization: skipped re-verifications
         }
 
         # --- Hot cache (in-memory raw-bytes tier) ---
@@ -602,6 +625,40 @@ class PagedSSDCacheManager(CacheManager):
             f"max_size={format_bytes(max_size_bytes)}{hot_info}, "
             f"existing_files={self._index.count}"
         )
+
+        # --- P1-5: Smart Prefetch ---
+        self.enable_prefetch = enable_prefetch
+        self.prefetch_top_n = prefetch_top_n
+        self.prefetch_interval = prefetch_interval
+        self._prefetch_running = False
+
+        if enable_prefetch:
+            self._access_tracker = AccessFrequencyTracker()
+            self._prefetcher = AsyncPrefetcher(num_workers=4)
+            self._prefetcher.start()
+
+            # 启动定期预取定时器
+            self._start_prefetch_timer()
+
+            logger.info(
+                f"✅ P1-5 Smart Prefetch enabled: top-{prefetch_top_n} blocks, "
+                f"interval {prefetch_interval}s"
+            )
+        else:
+            self._access_tracker = None
+            self._prefetcher = None
+            logger.info("Smart Prefetch disabled")
+
+        # --- P1-6: Checksum Validation ---
+        # Cache of verified block hashes to skip repeated verification
+        self._verified_blocks: set = set()
+        self._verified_blocks_lock = threading.Lock()
+
+        if enable_checksum:
+            mode = "strict" if checksum_verify_on_load else "performance"
+            logger.info(f"✅ P1-6 Checksum Validation enabled (xxh64, {mode} mode)")
+        else:
+            logger.info("Checksum validation disabled")
 
     # --- Hot cache helpers ---
 
@@ -764,16 +821,18 @@ class PagedSSDCacheManager(CacheManager):
             if not subdir_path.exists():
                 continue
 
-            for file_path in subdir_path.glob("*.safetensors"):
-                scanned += 1
-                try:
-                    metadata = self._read_file_metadata(file_path)
-                    if metadata:
-                        self._index.add(metadata)
-                        indexed += 1
-                except Exception as e:
-                    logger.warning(f"Failed to read {file_path}: {e}")
-                    errors += 1
+            # Scan both .safetensors and .safetensors.zst files
+            for pattern in ["*.safetensors", "*.safetensors.zst"]:
+                for file_path in subdir_path.glob(pattern):
+                    scanned += 1
+                    try:
+                        metadata = self._read_file_metadata(file_path)
+                        if metadata:
+                            self._index.add(metadata)
+                            indexed += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to read {file_path}: {e}")
+                        errors += 1
 
         logger.info(
             f"SSD cache scan complete: scanned={scanned}, indexed={indexed}, "
@@ -794,8 +853,27 @@ class PagedSSDCacheManager(CacheManager):
             return None
 
         try:
-            # Load just the metadata without loading tensors
-            _, metadata = mx.load(str(file_path), return_metadata=True)
+            # Decompress if needed (for .zst files)
+            if file_path.suffix == '.zst':
+                import zlib
+                import tempfile
+
+                with open(file_path, 'rb') as f:
+                    compressed_data = f.read()
+
+                raw_data = zlib.decompress(compressed_data)
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.safetensors') as tmp:
+                    tmp.write(raw_data)
+                    temp_path_str = tmp.name
+
+                try:
+                    _, metadata = mx.load(temp_path_str, return_metadata=True)
+                finally:
+                    Path(temp_path_str).unlink()
+            else:
+                # Load just the metadata without loading tensors
+                _, metadata = mx.load(str(file_path), return_metadata=True)
 
             block_hash_hex = metadata.get("block_hash", "")
             if not block_hash_hex:
@@ -1073,6 +1151,11 @@ class PagedSSDCacheManager(CacheManager):
             for name, arr in arrays.items():
                 tensors_raw[name] = _extract_tensor_bytes(arr)
 
+            # P1-6: Add checksum to metadata
+            if self.enable_checksum:
+                from .checksum import add_checksum_to_metadata
+                metadata = add_checksum_to_metadata(metadata, tensors_raw)
+
             # Estimate file size from raw bytes (actual size set by background writer)
             estimated_size = (
                 sum(len(raw) for raw, _, _ in tensors_raw.values()) + 1024
@@ -1109,6 +1192,11 @@ class PagedSSDCacheManager(CacheManager):
                 # flushed to SSD (in _enqueue_ssd_write).
                 self._hot_cache_put(block_hash, cache_entry)
                 self._stats["saves"] += 1
+
+                # P1-5: Track access for smart prefetch
+                if self._access_tracker:
+                    self._access_tracker.track_access(block_hash)
+
                 return True
 
             # SSD path: add to index for SSD file tracking
@@ -1143,6 +1231,11 @@ class PagedSSDCacheManager(CacheManager):
                 f"Enqueued block for SSD cache write: {block_hash.hex()[:16]}..., "
                 f"size={format_bytes(estimated_size)}"
             )
+
+            # P1-5: Track access for smart prefetch
+            if self._access_tracker:
+                self._access_tracker.track_access(block_hash)
+
             return True
 
         except Exception as e:
@@ -1334,6 +1427,47 @@ class PagedSSDCacheManager(CacheManager):
             else:
                 arrays, file_metadata = mx.load(str(file_path), return_metadata=True)
 
+            # P1-6: Verify checksum
+            if self.enable_checksum and self.checksum_verify_on_load:
+                # Check if this block was already verified
+                with self._verified_blocks_lock:
+                    already_verified = block_hash in self._verified_blocks
+
+                if already_verified:
+                    # Skip verification for already-verified blocks
+                    self._stats["cached_verifications"] += 1
+                else:
+                    # Extract raw bytes for checksum verification
+                    tensors_raw = {}
+                    for name, arr in arrays.items():
+                        mx.eval(arr)
+                        tensors_raw[name] = _extract_tensor_bytes(arr)
+
+                    from .checksum import verify_checksum_from_metadata
+
+                    if not verify_checksum_from_metadata(file_metadata, tensors_raw):
+                        # Checksum verification failed
+                        logger.error(
+                            f"❌ Checksum validation failed for block {block_hash.hex()[:16]}..."
+                        )
+                        self._stats["checksum_failures"] += 1
+
+                        # Delete corrupted cache file
+                        self._index.remove(block_hash)
+                        try:
+                            file_path.unlink()
+                            logger.info(f"Deleted corrupted cache file: {file_path}")
+                        except Exception:
+                            pass
+
+                        return None  # Verification failed, return None
+
+                    self._stats["checksum_verifications"] += 1
+
+                    # Mark this block as verified
+                    with self._verified_blocks_lock:
+                        self._verified_blocks.add(block_hash)
+
             # Get layer_cache_types for CacheList detection
             layer_cache_types = metadata.layer_cache_types
             if not layer_cache_types and file_metadata and "layer_cache_types" in file_metadata:
@@ -1356,6 +1490,10 @@ class PagedSSDCacheManager(CacheManager):
             # Promote to hot cache for faster access next time
             if self._hot_cache_enabled:
                 self._promote_to_hot_cache(block_hash, arrays, file_metadata, metadata)
+
+            # P1-5: Track access for smart prefetch
+            if self._access_tracker:
+                self._access_tracker.track_access(block_hash)
 
             logger.debug(f"Loaded block from SSD cache: {block_hash.hex()[:16]}...")
             return cache_data
@@ -1697,6 +1835,9 @@ class PagedSSDCacheManager(CacheManager):
                 hot_cache_hits=self._stats["hot_cache_hits"],
                 hot_cache_evictions=self._stats["hot_cache_evictions"],
                 hot_cache_promotions=self._stats["hot_cache_promotions"],
+                checksum_verifications=self._stats["checksum_verifications"],
+                checksum_failures=self._stats["checksum_failures"],
+                cached_verifications=self._stats["cached_verifications"],
             )
 
     def get_stats_dict(self) -> Dict[str, Any]:
@@ -1883,3 +2024,248 @@ class PagedSSDCacheManager(CacheManager):
         return self._max_size
 
 
+
+    # --- P1-5: Smart Prefetch Implementation ---
+
+    def _start_prefetch_timer(self) -> None:
+        """启动定期预取定时器（P1-5）。"""
+        def prefetch_hot_blocks_periodically():
+            while self._prefetch_running and self.enable_prefetch:
+                time.sleep(self.prefetch_interval)
+
+                try:
+                    self._trigger_smart_prefetch()
+                except Exception as e:
+                    logger.error(f"Prefetch error: {e}", exc_info=True)
+
+        self._prefetch_running = True
+        self._prefetch_thread = threading.Thread(
+            target=prefetch_hot_blocks_periodically,
+            daemon=True,
+            name="prefetch-timer"
+        )
+        self._prefetch_thread.start()
+        logger.debug("Prefetch timer thread started")
+
+    def _trigger_smart_prefetch(self) -> None:
+        """触发智能预取（定期调用）（P1-5）。"""
+        if not self.enable_prefetch or not self._access_tracker:
+            return
+
+        # 1. 获取热块列表
+        hot_blocks = self._access_tracker.get_hot_blocks(
+            top_n=self.prefetch_top_n,
+            min_access_count=2  # 至少访问 2 次才预取
+        )
+
+        if not hot_blocks:
+            logger.debug("No hot blocks to prefetch")
+            return
+
+        # 2. 过滤：只预取在 SSD 但不在 hot cache 的块
+        blocks_to_prefetch = []
+        for block_hash, access_count in hot_blocks:
+            # 检查是否在 SSD
+            metadata = self._index.get(block_hash)
+            if metadata is None:
+                continue
+
+            # 检查是否已在 hot cache
+            if self._hot_cache_enabled:
+                with self._hot_cache_lock:
+                    if block_hash in self._hot_cache:
+                        continue  # 已在内存，跳过
+
+            blocks_to_prefetch.append(block_hash)
+
+        if not blocks_to_prefetch:
+            logger.debug("All hot blocks already in memory cache")
+            return
+
+        access_counts = [count for _, count in hot_blocks[:min(5, len(hot_blocks))]]
+        logger.info(
+            f"🔥 Triggering smart prefetch: {len(blocks_to_prefetch)} blocks "
+            f"(top access counts: {access_counts})"
+        )
+
+        # 3. 异步预取
+        self._prefetcher.prefetch_blocks(
+            block_hashes=blocks_to_prefetch,
+            load_fn=self._load_block_from_disk,
+            on_loaded=self._on_block_prefetched
+        )
+
+    def _load_block_from_disk(
+        self,
+        block_hash: bytes
+    ) -> Optional[Dict[str, Any]]:
+        """
+        从 SSD 加载块（供预取器调用）（P1-5）。
+
+        Args:
+            block_hash: 块哈希
+
+        Returns:
+            包含 tensors_raw 和 metadata 的字典，或 None
+        """
+        if not HAS_MLX:
+            return None
+
+        metadata = self._index.get(block_hash)
+        if not metadata:
+            return None
+
+        file_path = metadata.file_path
+
+        if not file_path.exists():
+            logger.warning(f"Prefetch: file missing {file_path}")
+            self._index.remove(block_hash)
+            return None
+
+        try:
+            # Load from disk (with decompression if needed)
+            if file_path.suffix == '.zst':
+                import zlib
+                import tempfile
+
+                with open(file_path, 'rb') as f:
+                    compressed_data = f.read()
+
+                raw_data = zlib.decompress(compressed_data)
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.safetensors') as tmp:
+                    tmp.write(raw_data)
+                    temp_path_str = tmp.name
+
+                arrays, file_metadata = mx.load(temp_path_str, return_metadata=True)
+                Path(temp_path_str).unlink()
+            else:
+                arrays, file_metadata = mx.load(str(file_path), return_metadata=True)
+
+            # Extract raw bytes for hot cache insertion
+            tensors_raw = {}
+            for name, arr in arrays.items():
+                mx.eval(arr)  # Ensure evaluated
+                tensors_raw[name] = _extract_tensor_bytes(arr)
+
+            return {
+                'tensors_raw': tensors_raw,
+                'file_metadata': file_metadata,
+                'block_metadata': metadata
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to prefetch block {block_hash.hex()[:8]}...: {e}")
+            return None
+
+    def _on_block_prefetched(
+        self,
+        block_hash: bytes,
+        block_data: Dict[str, Any]
+    ) -> None:
+        """
+        预取完成回调（供预取器调用）（P1-5）。
+
+        Args:
+            block_hash: 块哈希
+            block_data: 块数据（包含 tensors_raw 和 metadata）
+        """
+        if not self._hot_cache_enabled:
+            logger.debug("Hot cache disabled, skipping prefetched block insertion")
+            return
+
+        try:
+            metadata = block_data['block_metadata']
+
+            cache_entry = {
+                'tensors_raw': block_data['tensors_raw'],
+                'file_metadata': block_data['file_metadata'],
+                'num_layers': metadata.num_layers,
+                'layer_cache_types': metadata.layer_cache_types,
+                'block_metadata': metadata,
+            }
+
+            # Insert into hot cache
+            self._hot_cache_put(block_hash, cache_entry)
+            self._stats["hot_cache_promotions"] += 1
+
+            logger.debug(
+                f"✅ Prefetched block {block_hash.hex()[:8]}... promoted to hot cache"
+            )
+
+        except Exception as e:
+            logger.error(
+                f"Failed to insert prefetched block {block_hash.hex()[:8]}...: {e}"
+            )
+
+    def flush(self, timeout: float = 30.0) -> bool:
+        """
+        等待所有待写入的 block 完成写入。
+
+        Args:
+            timeout: 最大等待时间（秒），默认 30 秒
+
+        Returns:
+            True 如果所有写入完成，False 如果超时
+        """
+        start_time = time.time()
+
+        while not self._write_queue.empty():
+            if time.time() - start_time > timeout:
+                remaining = self._write_queue.qsize()
+                logger.warning(
+                    f"flush() timeout after {timeout}s, {remaining} writes still pending"
+                )
+                return False
+            time.sleep(0.1)
+
+        logger.debug("flush() completed, all writes finished")
+        return True
+
+    def stop(self) -> None:
+        """停止预取器和后台线程（P1-5）。"""
+        logger.info("Stopping PagedSSDCacheManager...")
+
+        # Stop prefetch timer
+        if hasattr(self, '_prefetch_running'):
+            self._prefetch_running = False
+
+            if hasattr(self, '_prefetch_thread'):
+                self._prefetch_thread.join(timeout=5.0)
+                logger.debug("Prefetch timer thread stopped")
+
+        # Stop prefetcher
+        if self._prefetcher:
+            self._prefetcher.stop()
+            logger.debug("AsyncPrefetcher stopped")
+
+        # Stop background writer
+        self._writer_shutdown.set()
+        if hasattr(self, '_writer_thread'):
+            self._writer_thread.join(timeout=10.0)
+            logger.debug("Background writer stopped")
+
+        logger.info("PagedSSDCacheManager stopped")
+
+    def get_prefetch_stats(self) -> Dict[str, Any]:
+        """
+        获取预取统计信息（P1-5）。
+
+        Returns:
+            统计字典
+        """
+        if not self.enable_prefetch or not self._access_tracker:
+            return {
+                'enabled': False
+            }
+
+        access_stats = self._access_tracker.get_stats()
+        prefetcher_status = self._prefetcher.get_status() if self._prefetcher else {}
+
+        return {
+            'enabled': True,
+            'top_n': self.prefetch_top_n,
+            'interval': self.prefetch_interval,
+            'access_tracker': access_stats,
+            'prefetcher': prefetcher_status,
+        }

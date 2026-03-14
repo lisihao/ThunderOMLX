@@ -340,22 +340,20 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
             prompt_checkpoints,
         ) = zip(*prompts)
 
-        # Full Skip: Check if all UIDs in this batch have 100% cache hit
+        # Full Skip: Log when all UIDs have 100% cache hit
+        # Note: We still process the single-token prefill (last token) normally
+        # because BatchGenerator expects to handle all prompts
         if uids and all(uid in self._skip_prefill_uids for uid in uids):
             logger.info(
-                f"✨ [Full Skip Path] All {len(uids)} UIDs have 100% cache hit, "
-                f"skipping prefill computation entirely. UIDs: {list(uids)}"
+                f"✨ [Full Skip Batch] All {len(uids)} UIDs have 100% cache hit, "
+                f"processing last tokens only. UIDs: {list(uids)}"
             )
-            # Clean up processed UIDs
+            # Clean up processed UIDs (will be re-added if still full skip next time)
             for uid in uids:
                 self._skip_prefill_uids.discard(uid)
-                # Also clean up VLM embeddings if any
-                self._vlm_pending.pop(uid, None)
 
-            # Return early - no prefill computation needed
-            # The cache already contains all necessary KV state
-            # Just return empty/minimal result to signal completion
-            return
+        # Continue normal processing - even Full Skip requests need the single-token
+        # prefill to transition from cached state to generation
 
         lengths = [len(p) for p in inputs]
         max_length = max(lengths)
@@ -2256,9 +2254,11 @@ class Scheduler:
                 extra_keys = (request.vlm_image_hash,)
 
             # Use match_cache_with_skip_logic for Full Skip detection
+            # Use 90% threshold (was 95%) for more practical Approximate Skip triggering
             cache_result = self.block_aware_cache.match_cache_with_skip_logic(
                 request.prompt_token_ids,
                 extra_keys=extra_keys,
+                approx_threshold=0.90,  # P0-2: 90% threshold for Approximate Skip
             )
 
             block_table = cache_result['block_table']
@@ -2268,7 +2268,12 @@ class Scheduler:
             skip_reason = cache_result.get('skip_reason', 'none')
             approx_zero_fill_count = cache_result.get('approx_zero_fill_count', 0)
 
-            # Log skip decision
+            # Log skip decision (DEBUG)
+            logger.info(
+                f"Cache match result: can_skip={can_skip_prefill}, skip_reason={skip_reason}, "
+                f"cache_hit_ratio={cache_hit_ratio:.1%}, remaining={len(remaining)}"
+            )
+
             if can_skip_prefill:
                 request.skip_prefill = True
                 request.skip_reason = skip_reason
@@ -3122,8 +3127,8 @@ class Scheduler:
                                     boundary_snapshots=intermediate_snapshots,
                                     extra_keys=store_extra_keys,
                                 )
-                            logger.debug(
-                                f"Stored paged cache for request {request_id} "
+                            logger.info(
+                                f"✅ Stored paged cache for request {request_id} "
                                 f"({len(token_sequence_to_store)} tokens stored, "
                                 f"{len(full_token_sequence)} total: "
                                 f"{len(request.prompt_token_ids)} prompt + "
@@ -3133,7 +3138,7 @@ class Scheduler:
                             # (store_cache already cloned to PagedCache blocks)
                             request._extracted_cache = None
                         except Exception as e:
-                            logger.debug(f"Failed to store paged cache for {request_id}: {e}")
+                            logger.warning(f"⚠️ Failed to store paged cache for {request_id}: {e}")
 
                     # ALWAYS release blocks for eviction, even if store_cache() failed
                     # This prevents ref_count leak when _extracted_cache is None or exception occurs

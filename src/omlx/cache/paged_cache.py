@@ -95,8 +95,10 @@ def compute_block_hash(
             hasher.update(b"omlx-root")
 
         # 4. Include token content (convert to bytes efficiently)
-        # Use bytes(token_ids) instead of str(tuple(token_ids)) for speed
-        token_bytes = bytes(token_ids) if isinstance(token_ids, (list, tuple)) else bytes(list(token_ids))
+        # Use array.array for efficient int→bytes conversion
+        import array
+        token_array = array.array('i', token_ids)  # 'i' = signed int (4 bytes each)
+        token_bytes = token_array.tobytes()
         hasher.update(token_bytes)
 
         # 5. Include extra keys if present (position hash)
