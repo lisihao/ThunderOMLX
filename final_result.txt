@@ -1,0 +1,36 @@
+======================================================================
+P0 Features Ultra Long Test
+======================================================================
+
+🔵 Round 1: Cold start...
+  Time: 25.71s
+  Tokens: 10883 prompt + 50 completion
+  Blocks: 10 full blocks (10240 tokens cached)
+  Cache ratio: 10240/10883 = 94.1%
+
+🟢 Round 2: Exact same prompt (Full Skip test)...
+  Time: 2.30s
+  Speedup: 11.2x
+
+🟡 Round 3: Same prompt + short suffix (Approximate Skip test)...
+  Time: 14.59s
+  Tokens: 10891
+  Cache hit ratio: 10240/10891 = 94.0%
+  Speedup: 1.8x
+
+======================================================================
+RESULTS
+======================================================================
+✅ Created 10 cache blocks (10240 tokens)
+✅ Round 2 speedup: 11.2x
+✅ Round 3 cache hit: 94.0% (threshold: 95%)
+
+📝 Verification commands:
+   # 检查块保存:
+   grep '💾 Saved block' ~/ThunderOMLX/omlx_debug*.log | tail -10
+
+   # 检查缓存匹配:
+   grep 'Cache match result' ~/ThunderOMLX/omlx_debug*.log | tail -10
+
+   # 检查 Skip Logic:
+   grep -E '(FULL SKIP|APPROXIMATE SKIP)' ~/ThunderOMLX/omlx_debug*.log

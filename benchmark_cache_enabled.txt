@@ -1,0 +1,1 @@
+🚀 运行性能测试（缓存已启用）... export PYTHONPATH=/Users/lisihao/ThunderOMLX/src: python3 benchmark_omlx.py

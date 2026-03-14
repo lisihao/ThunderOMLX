@@ -1503,10 +1503,19 @@ class PagedSSDCacheManager(CacheManager):
                 entry['num_layers'], entry['layer_cache_types'],
             )
             if cache_data is not None:
-                self._index.touch(block_hash)
+                # Only touch index if block is in index (i.e., written to SSD)
+                in_index = self._index.contains(block_hash)
+                if in_index:
+                    self._index.touch(block_hash)
+
                 self._stats["loads"] += 1
                 self._stats["hits"] += 1
-                self._stats["hot_cache_hits"] += 1
+
+                # Only count as hot cache hit if block was loaded from SSD
+                # (i.e., exists in index, not just saved to hot cache)
+                if in_index:
+                    self._stats["hot_cache_hits"] += 1
+
                 logger.debug(
                     f"Loaded block from hot cache: {block_hash.hex()[:16]}..."
                 )

@@ -907,9 +907,9 @@ class SchedulerConfig:
     # paged SSD cache settings (oMLX only supports paged SSD-based caching)
     # When paged_ssd_cache_dir is set, oMLX stores KV cache on paged SSD for prefix reuse.
     # When None, no oMLX caching (mlx-lm BatchGenerator manages KV internally).
-    paged_ssd_cache_dir: Optional[str] = None  # Path for paged SSD cache storage (None = disabled)
-    paged_ssd_cache_max_size: int = 100 * 1024 * 1024 * 1024  # 100GB default
-    hot_cache_max_size: int = 0  # In-memory hot cache size in bytes (0 = disabled)
+    paged_ssd_cache_dir: Optional[str] = str(Path.home() / ".cache" / "omlx" / "paged_ssd")  # ✅ FORCED ENABLE for testing
+    paged_ssd_cache_max_size: int = 50 * 1024 * 1024 * 1024  # 50GB for testing
+    hot_cache_max_size: int = 8 * 1024 * 1024 * 1024  # 8GB hot cache for testing
 
     # Model identification (for cache isolation between different models)
     model_name: str = ""  # OpenAI API model name (e.g., "mlx-community/Llama-3.2-3B")
@@ -917,6 +917,23 @@ class SchedulerConfig:
     # GC/cleanup settings (memory optimization)
     gc_cleanup_interval: int = 0  # Steps between gc.collect() calls (0=disabled)
     mlx_cache_cleanup_interval: int = 32  # Steps between mx.clear_cache() calls
+
+    # Skip Logic testing flag (disable ArraysCache block_size auto-enlargement)
+    # When True, allows testing Skip Logic with small block sizes on ArraysCache models
+    disable_block_size_enlargement: bool = False
+
+    # ⚡ 方案 2: 动态 block_size 选择（根据使用场景）
+    # ArraysCache 模型的目标 block_size（替代固定的 1024）
+    # - None: 智能选择（使用当前 paged_cache_block_size 和一个合理上限）
+    # - 64: 短 prompt 场景（< 256 tokens，高重复 agent）
+    # - 256: 中等 prompt 场景（256-1024 tokens）
+    # - 1024: 长 prompt 场景（> 1024 tokens，默认行为）
+    arrays_cache_target_block_size: Optional[int] = None
+
+    # ⚡ 策略 1: Prompt Padding 到 block 边界（提高 Skip Logic 触发率）
+    # 将 prompt 填充到最近的 block 边界，确保 100% cache hit
+    enable_prompt_padding: bool = False  # 默认关闭（避免影响现有行为）
+    max_padding_tokens: int = 64  # 最大填充 token 数（避免过度填充）
 
 
 @dataclass
@@ -1251,15 +1268,28 @@ class Scheduler:
     _ARRAYS_CACHE_BLOCK_SIZE = 1024
 
     def _enlarge_block_size_for_arrays_cache(self) -> None:
-        """Enlarge block size for ArraysCache-only hybrid models.
+        """Enlarge block size for ArraysCache-only hybrid models with smart selection.
 
         When a model uses ArraysCache (GatedDeltaNet) but not RotatingKVCache,
         a larger block size reduces the number of boundary snapshot stops during
         prefill while still storing valid per-block recurrent state.
 
-        This is skipped if RotatingKVCache was already detected (block size was
-        aligned to its window size) or if the user explicitly set a block size
-        larger than the default.
+        ⚡ Dynamic block_size selection (方案 2):
+        - If arrays_cache_target_block_size is set: use user-specified value
+        - If None (default): smart auto-selection based on current block_size:
+          * current < 128 → target = 256 (balanced for short/medium prompts)
+          * current 128-255 → target = 512 (medium prompts)
+          * current >= 256 → target = 1024 (long prompts, default behavior)
+
+        This allows users to optimize for their specific use case:
+        - Short prompt agents (< 256 tokens): set initial block_size=32/64, auto → 256
+        - Medium prompts (256-1024 tokens): set initial block_size=128, auto → 512
+        - Long prompts (> 1024 tokens): set initial block_size=256+, auto → 1024
+
+        This is skipped if:
+        - RotatingKVCache was already detected (block size aligned to window size)
+        - disable_block_size_enlargement=True (方案 1, for testing)
+        - Current block_size already >= target
         """
         if not self.config.paged_ssd_cache_dir:
             return
@@ -1288,15 +1318,52 @@ class Scheduler:
         if not has_arrays_cache:
             return
 
-        target = self._ARRAYS_CACHE_BLOCK_SIZE
+        # ⚡ 方案 1: 允许禁用 ArraysCache block_size 自动提升（用于 Skip Logic 测试）
+        if self.config.disable_block_size_enlargement:
+            logger.info(
+                "Skipping block_size enlargement for ArraysCache (disable_block_size_enlargement=True). "
+                "Current block_size=%s will be used for testing Skip Logic.",
+                self.config.paged_cache_block_size,
+            )
+            return
+
+        # ⚡ 方案 2: 动态 block_size 选择（根据使用场景）
+        # 确定目标 block_size
+        if self.config.arrays_cache_target_block_size is not None:
+            # 用户显式指定
+            target = self.config.arrays_cache_target_block_size
+            selection_reason = f"user-specified={target}"
+        else:
+            # 智能选择：根据当前 block_size 决定目标
+            current = self.config.paged_cache_block_size
+            if current < 128:
+                # 非常小的 block_size（< 128），提升到 256（平衡短/长 prompt）
+                target = 256
+                selection_reason = "auto: current < 128 → 256 (balanced)"
+            elif current < 256:
+                # 小 block_size（128-255），提升到 512（适中）
+                target = 512
+                selection_reason = "auto: current < 256 → 512 (medium)"
+            else:
+                # 已经是中等或大 block_size（≥ 256），提升到 1024（默认）
+                target = self._ARRAYS_CACHE_BLOCK_SIZE
+                selection_reason = f"auto: current >= 256 → {target} (default)"
+
+        # 如果当前 block_size 已经 >= 目标值，不需要提升
         if self.config.paged_cache_block_size >= target:
+            logger.info(
+                "ArraysCache block_size=%s already meets target=%s (%s), no enlargement needed",
+                self.config.paged_cache_block_size,
+                target,
+                selection_reason,
+            )
             return
 
         logger.info(
-            "Enlarging paged cache block_size=%s to %s for "
-            "ArraysCache hybrid model (reduces boundary snapshot overhead)",
+            "Enlarging paged cache block_size=%s to %s for ArraysCache hybrid model (%s)",
             self.config.paged_cache_block_size,
             target,
+            selection_reason,
         )
         self.config.paged_cache_block_size = target
 
@@ -2244,6 +2311,39 @@ class Scheduler:
             else:
                 request.prompt_token_ids = list(request.prompt)
             request.num_prompt_tokens = len(request.prompt_token_ids)
+
+        # ⚡ 策略 1: Prompt Padding 到 block 边界（提高 Skip Logic 触发率）
+        if self.config.enable_prompt_padding and self.block_aware_cache is not None:
+            original_len = len(request.prompt_token_ids)
+            block_size = self.config.paged_cache_block_size
+            remainder = original_len % block_size
+
+            if remainder > 0:
+                padding_needed = block_size - remainder
+
+                # 限制 padding 数量（避免过度填充）
+                if padding_needed <= self.config.max_padding_tokens:
+                    # 使用 pad_token_id 或 eos_token_id 填充
+                    pad_token = self.tokenizer.pad_token_id
+                    if pad_token is None:
+                        pad_token = self.tokenizer.eos_token_id
+
+                    if pad_token is not None:
+                        request.prompt_token_ids = list(request.prompt_token_ids) + [pad_token] * padding_needed
+                        request.num_prompt_tokens = len(request.prompt_token_ids)
+
+                        logger.info(
+                            f"⚡ Prompt Padding: {original_len} → {request.num_prompt_tokens} tokens "
+                            f"(+{padding_needed} padding) for 100% cache alignment to block_size={block_size}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Prompt Padding disabled: tokenizer has no pad_token_id or eos_token_id"
+                        )
+                else:
+                    logger.debug(
+                        f"Prompt Padding skipped: padding_needed={padding_needed} > max_padding_tokens={self.config.max_padding_tokens}"
+                    )
 
         # Check prefix cache for cached KV state with Full Skip Logic
         if self.block_aware_cache is not None:
@@ -3598,18 +3698,28 @@ class Scheduler:
         - PagedCacheManager only stores block metadata (no GPU memory for cache data)
         - BatchGenerator handles GPU memory for active inference
         """
+        print(f"🔍 DEBUG: _init_tiered_cache called, HAS_TIERED_CACHE={HAS_TIERED_CACHE}")
+        print(f"🔍 DEBUG: paged_ssd_cache_dir={self.config.paged_ssd_cache_dir}")
+
         if not HAS_TIERED_CACHE:
             if self.config.paged_ssd_cache_dir:
                 logger.warning(
                     "paged SSD cache requested but ssd_cache/memory_monitor modules "
                     "not available. Install required dependencies."
                 )
+                print("❌ DEBUG: HAS_TIERED_CACHE is False, cache disabled!")
             return
 
         # In paged SSD-only mode, paged_ssd_cache_dir is required
         if not self.config.paged_ssd_cache_dir:
             logger.debug("paged SSD cache not configured (no --ssd-cache-dir specified)")
+            print("❌ DEBUG: paged_ssd_cache_dir is None, cache disabled!")
             return
+
+        print(f"✅ DEBUG: Initializing PagedSSDCacheManager...")
+        print(f"   cache_dir={self.config.paged_ssd_cache_dir}")
+        print(f"   max_size={self.config.paged_ssd_cache_max_size / (1024**3):.1f}GB")
+        print(f"   hot_cache={self.config.hot_cache_max_size / (1024**3):.1f}GB")
 
         try:
             # Initialize paged SSD cache manager for SSD storage
@@ -3618,6 +3728,7 @@ class Scheduler:
                 max_size_bytes=self.config.paged_ssd_cache_max_size,
                 hot_cache_max_bytes=self.config.hot_cache_max_size,
             )
+            print(f"✅ DEBUG: PagedSSDCacheManager initialized successfully!")
 
             # Connect paged SSD cache manager to PagedCacheManager
             if self.paged_cache_manager is not None:

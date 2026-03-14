@@ -1,0 +1,51 @@
+======================================================================
+P0 Features Final Verification (2100+ tokens)
+======================================================================
+
+🔵 Round 1: Cold start (creating 2+ cache blocks)...
+  Time: 3.25s
+  Tokens: 1707 prompt + 50 completion
+  Blocks: 1 full blocks created (1024 tokens cached)
+  Remainder: 683 tokens (not cached)
+
+🟢 Round 2: Cache hit test (expecting FULL SKIP with 100% hit)...
+  Time: 1.66s
+  Tokens: 1707 prompt + 50 completion
+  Speedup: 2.0x
+  Expected: Cache hit ratio = 60.0%
+
+🟡 Round 3: Partial cache hit (expecting APPROXIMATE SKIP >95%)...
+  Time: 2.88s
+  Tokens: 1713 prompt + 50 completion
+  Speedup: 1.1x
+  Expected cache hit: 1024/1713 = 59.8%
+
+======================================================================
+SUMMARY
+======================================================================
+Cold start:         3.25s  (1707 tokens → 1 blocks)
+Cache hit:          1.66s  (2.0x speedup)
+Partial cache hit:  2.88s  (1.1x speedup)
+
+⚠️  Warning: Only 1 blocks created (need 2+ for proper testing)
+⚠️  Round 2 speedup: 2.0x (expected ≥2x)
+⚠️  Round 3 cache hit: 59.8% (<95%, won't trigger APPROXIMATE SKIP)
+
+======================================================================
+VERIFICATION STEPS
+======================================================================
+
+1️⃣ Check if blocks were saved to SSD:
+   grep '💾 Saved block' ~/ThunderOMLX/omlx_debug*.log | tail -5
+
+2️⃣ Check cache match results:
+   grep 'Cache match result' ~/ThunderOMLX/omlx_debug*.log | tail -5
+
+3️⃣ Check for FULL SKIP or APPROXIMATE SKIP logs:
+   grep -i 'full skip\|approximate skip' ~/ThunderOMLX/omlx_debug*.log
+
+4️⃣ Check SSD cache files:
+   find ~/.cache/omlx_cache -type f -name '*.safetensors*'
+   du -sh ~/.cache/omlx_cache
+
+⚠️  Some checks failed. Review the verification steps above.

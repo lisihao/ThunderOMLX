@@ -1,0 +1,29 @@
+============================================================
+P0 Features Cache Verification
+============================================================
+
+🔵 Round 1: Cold start (populating cache)...
+  Time: 12.35s
+  Tokens: 62 prompt + 50 completion
+
+🟢 Round 2: Cache hit test (expecting Full Skip)...
+  Time: 0.99s
+  Tokens: 62 prompt + 50 completion
+  Speedup: 12.5x
+
+🟡 Round 3: Partial cache hit test (expecting Approximate Skip)...
+  Time: 1.08s
+  Tokens: 67 prompt + 50 completion
+  Speedup: 11.4x
+
+============================================================
+SUMMARY
+============================================================
+Cold start:         12.35s
+Cache hit:          0.99s (#12.5x)
+Partial cache hit:  1.08s (11.4x)
+
+✅ Full Skip Logic appears to be working (2x+ speedup)
+
+📝 Check omlx_server.log for skip messages:
+   grep -i 'full skip\|approximate skip' omlx_server.log

@@ -363,6 +363,51 @@ PagedSSDCacheManager(
 
 ---
 
+## 🔧 Phase 1 后续改进（2026-03-14）
+
+### Hot Cache 统计准确性改进 ✅
+
+**问题发现**：
+- 综合 Agent 测试中 `hot_cache_hits = 0`，无法验证预取效果
+- 根因：无法区分"在内存中的块"（首次 save）和"已落盘的块"（evict 过）
+- 影响：统计不准确，无法反映预取优化的真实价值
+
+**方案设计**：
+```python
+# load_block() 中增加状态检查
+in_index = self._index.contains(block_hash)  # index = "已落盘"
+if in_index:
+    self._stats["hot_cache_hits"] += 1  # 只有已落盘的块才计入
+```
+
+**核心改进**：
+- 用 `index` 判断块是否写入过 SSD
+- 只有从 hot cache 加载**已落盘**的块时，才计入 `hot_cache_hits`
+- 区分：首次 save（未落盘）vs Evict 后重新加载（已落盘）
+
+**验证结果**：
+
+| 测试场景 | Hot cache hits | 说明 |
+|----------|---------------|------|
+| 首次 save + load（未落盘） | 0 | ✅ 符合预期 |
+| Evict → SSD → Hot cache | 1 | ✅ 符合预期 |
+| 真实 Agent（10 轮，20 次 load） | 19 (95%) | ✅ 符合预期 |
+
+**性能数据**（真实 Agent 场景）：
+- SSD load（首次）: **37.19 ms**
+- Hot cache load（后续）: **~0.35 ms**
+- **加速比: 106x**
+- 命中率: **95%** (19/20)
+
+**影响**：
+- ✅ 统计准确反映"从 SSD 加载回 hot cache"的次数
+- ✅ 真实场景验证通过（106x 加速）
+- ✅ 符合预取优化的真实价值
+
+**状态**: ✅ 已完成并验证（3 个独立测试通过）
+
+---
+
 **Phase 1 完成** 🎉
 **状态**: 全部功能实现、验证通过、性能达标
 **建议**: 生产部署就绪

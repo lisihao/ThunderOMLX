@@ -1,0 +1,33 @@
+# ThunderOMLX 统一配置文件
+# 版本: 1.0
+# 说明: 此文件为单一真相源，所有配置从此加载
+
+project_name: "ThunderOMLX"
+version: "0.1.0"
+
+# 性能目标
+target_generation_tps: 250
+
+# 缓存配置
+cache:
+  enable_l2_cache: true
+  enable_l3_cache: true
+  l2_cache_size_mb: 8192
+  l3_cache_path: "~/.cache/thunderomlx/l3_cache"
+  l3_cache_size_gb: 256
+  lru_k: 2
+  enable_mmap_zero_copy: true
+
+# 张量序列化
+serialization:
+  compression: "zlib"
+  compression_level: 6
+  enable_checksum: true
+  checksum_algorithm: "xxh64"
+
+# 异步 I/O
+async_io:
+  enable_async_io: true
+  prefetch_threads: 4
+  batch_size: 8
+  read_buffer_kb: 256

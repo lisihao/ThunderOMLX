@@ -1,0 +1,44 @@
+✅ Using model: Qwen3.5-35B-A3B-6bit
+
+📊 Running single request benchmarks...
+
+  Testing: pp1024/tg128
+    TTFT: 64138.4ms
+    Gen TPS: 0.0 tok/s
+    PP TPS: 16.1 tok/s
+
+  Testing: pp4096/tg128
+    TTFT: 6751.4ms
+    Gen TPS: 0.0 tok/s
+    PP TPS: 607.3 tok/s
+
+🚀 Running 4 concurrent requests...
+
+============================================================
+📈 BENCHMARK RESULTS
+============================================================
+
+🔷 Single Request Performance:
+  pp1030/tg128: 0.0 tok/s (TTFT: 64138.4ms)
+  pp4100/tg128: 0.0 tok/s (TTFT: 6751.4ms)
+
+🔷 Agent Scenario (4 Concurrent):
+  Wall time: 5.04s
+  Total tokens: 512 generated
+  Generation TPS: 101.7 tok/s
+  Prefill TPS: 34.2 tok/s
+  Avg TTFT: 4665.0ms
+
+🔷 ThunderLLAMA Baseline (for comparison):
+  Model: Qwen3-30B-A3B-Q5_K_M
+  Generation TPS: 687.6 tok/s
+  Cache hit: 99.7%
+  Skip rate: 94%
+
+🔷 Performance Ratio:
+  oMLX / ThunderLLAMA: 0.15x (14.8%)
+
+⚠️  oMLX is 6.8x slower - significant optimization potential!
+  Estimated gain from ThunderLLAMA features: 585.9 tok/s
+
+💾 Detailed results saved to: benchmark_results.json

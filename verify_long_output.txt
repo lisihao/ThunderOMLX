@@ -1,0 +1,34 @@
+============================================================
+P0 Features Cache Verification (Long Prompts)
+============================================================
+
+🔵 Round 1: Cold start (populating cache with >1024 tokens)...
+  Time: 36.03s
+  Tokens: 821 prompt + 50 completion
+  Expected: 821 tokens should create ~0 full blocks
+
+🟢 Round 2: Cache hit test (expecting FULL SKIP)...
+  Time: 1.77s
+  Tokens: 821 prompt + 50 completion
+  Speedup: 20.3x
+
+🟡 Round 3: Partial cache hit test (expecting APPROXIMATE SKIP)...
+  Time: 1.78s
+  Tokens: 830 prompt + 50 completion
+  Speedup: 20.3x
+
+============================================================
+SUMMARY
+============================================================
+Cold start:         36.03s
+Cache hit:          1.77s (20.3x)
+Partial cache hit:  1.78s (20.3x)
+
+✅ Full Skip Logic appears to be working (2x+ speedup)
+
+📝 Check server logs for cache messages:
+   grep -i 'full skip\|approximate skip\|saved block' omlx_debug*.log
+
+📂 Check SSD cache files:
+   find ~/.cache/omlx_cache -type f -name '*.safetensors*' | head -5
+   du -sh ~/.cache/omlx_cache

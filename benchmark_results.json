@@ -1,0 +1,38 @@
+{
+  "model": "Qwen3.5-35B-A3B-6bit",
+  "timestamp": 1773455017.42836,
+  "single_request": [
+    {
+      "pp": 1030,
+      "tg": 128,
+      "ttft_ms": 6728.6922079802025,
+      "gen_tps": 0,
+      "pp_tps": 153.07580851720695,
+      "e2e_s": 6.7286922079802025
+    },
+    {
+      "pp": 4100,
+      "tg": 128,
+      "ttft_ms": 6812.292624992551,
+      "gen_tps": 0,
+      "pp_tps": 601.8531830177337,
+      "e2e_s": 6.812292624992551
+    }
+  ],
+  "agent_scenario": {
+    "batch_size": 4,
+    "wall_time_s": 5.083143374999054,
+    "total_prompt_tokens": 172,
+    "total_completion_tokens": 512,
+    "avg_ttft_ms": 4707.634791499004,
+    "pp_tps": 33.8384223410613,
+    "gen_tps": 100.72507545591222,
+    "total_throughput": 134.56240549188274
+  },
+  "thunderllama_baseline": {
+    "gen_tps": 687.6,
+    "cache_hit": 0.997,
+    "skip_rate": 0.94
+  },
+  "performance_ratio": 0.14648789333320567
+}
