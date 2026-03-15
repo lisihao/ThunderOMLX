@@ -341,20 +341,18 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
             prompt_checkpoints,
         ) = zip(*prompts)
 
-        # Full Skip: Log when all UIDs have 100% cache hit
-        # Note: We still process the single-token prefill (last token) normally
-        # because BatchGenerator expects to handle all prompts
-        if uids and all(uid in self._skip_prefill_uids for uid in uids):
+        # Full Skip: Detect when all UIDs have 100% cache hit
+        # ⚡ NEW: Set flag to truly skip prefill computation
+        full_skip_mode = uids and all(uid in self._skip_prefill_uids for uid in uids)
+
+        if full_skip_mode:
             logger.info(
                 f"✨ [Full Skip Batch] All {len(uids)} UIDs have 100% cache hit, "
-                f"processing last tokens only. UIDs: {list(uids)}"
+                f"SKIPPING prefill computation entirely. UIDs: {list(uids)}"
             )
             # Clean up processed UIDs (will be re-added if still full skip next time)
             for uid in uids:
                 self._skip_prefill_uids.discard(uid)
-
-        # Continue normal processing - even Full Skip requests need the single-token
-        # prefill to transition from cached state to generation
 
         lengths = [len(p) for p in inputs]
         max_length = max(lengths)
@@ -547,6 +545,14 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
                 )
 
             while inputs.shape[1] > prompt_checkpoint:
+                # ⚡ FULL SKIP: Skip all prefill computation when 100% cache hit
+                if full_skip_mode:
+                    logger.info(
+                        f"✨ [Full Skip] Skipping prefill loop: 100% cache hit, "
+                        f"inputs.shape={inputs.shape}, prompt_checkpoint={prompt_checkpoint}"
+                    )
+                    break
+
                 max_allowed = inputs.shape[1] - prompt_checkpoint
                 if boundary_enabled:
                     n_to_process = self._next_boundary_limited_step(
@@ -644,7 +650,8 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
                     for i, uid in enumerate(uids)
                 ]
             )
-        if prompt_checkpoint > 1:
+        if prompt_checkpoint > 1 and not full_skip_mode:
+            # ⚡ FULL SKIP: Skip checkpoint processing when 100% cache hit
             model_kwargs_cp = {}
             if batched_embeds is not None and batched_embeds.shape[1] >= (prompt_checkpoint - 1):
                 # Slice VLM embeds for the checkpoint-to-last-1 range
@@ -901,7 +908,7 @@ class SchedulerConfig:
     prefill_step_size: int = 2048
 
     # Paged cache settings (internal defaults)
-    paged_cache_block_size: int = 64  # Tokens per block (降低以支持短 prompt 缓存)
+    paged_cache_block_size: int = 256  # ⚡ 优化为 256 (降低碎片化，提升缓存命中率)
     max_cache_blocks: Optional[int] = None  # Auto-calculated from available KV cache memory
     initial_cache_blocks: int = 256  # Starting blocks (grows dynamically to max_cache_blocks)
 
