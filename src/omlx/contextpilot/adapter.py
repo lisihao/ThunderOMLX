@@ -20,6 +20,7 @@ class OptimizedRequest(TypedDict):
     messages: List[Dict[str, str]]
     message_boundaries: List[int]
     context_refs: Dict[str, "ContextBlock"]
+    system_prompt_hash: Optional[str]  # sha256[:16] of system prompt for cluster identification
 
 
 @dataclass
@@ -163,25 +164,41 @@ class ContextPilotAdapter:
         context_index: The global ContextIndex for deduplication
     """
 
-    def __init__(self, context_index: Optional[ContextIndex] = None) -> None:
+    def __init__(
+        self,
+        context_index: Optional[ContextIndex] = None,
+        tokenizer: Any = None,
+    ) -> None:
         """
-        Initialize the adapter with optional context index.
+        Initialize the adapter with optional context index and tokenizer.
 
         Args:
             context_index: Optional ContextIndex instance (creates new one if None)
+            tokenizer: Optional tokenizer for precise message boundary computation.
+                       If None, message_boundaries will be empty.
         """
         self._context_index = context_index or ContextIndex()
-        logger.debug("ContextPilotAdapter initialized")
+        self._tokenizer = tokenizer
+        logger.debug(
+            f"ContextPilotAdapter initialized "
+            f"(tokenizer={'yes' if tokenizer else 'no'})"
+        )
 
     @property
     def context_index(self) -> ContextIndex:
         """Get the context index."""
         return self._context_index
 
+    def set_tokenizer(self, tokenizer: Any) -> None:
+        """Set tokenizer for precise message boundary computation."""
+        self._tokenizer = tokenizer
+        logger.debug("ContextPilotAdapter: tokenizer set")
+
     def optimize_request(
         self,
         messages: List[Dict[str, Any]],
-        previous_requests: Optional[List[List[Dict[str, Any]]]] = None
+        previous_requests: Optional[List[List[Dict[str, Any]]]] = None,
+        prompt_token_ids: Optional[List[int]] = None,
     ) -> OptimizedRequest:
         """
         Optimize a request by reordering messages for better cache utilization.
@@ -190,11 +207,13 @@ class ContextPilotAdapter:
         1. Parse messages into ContextBlocks (indexed for deduplication)
         2. Find longest common prefix with previous requests
         3. Reorder: common prefix first, new content last
-        4. Return optimized messages with metadata
+        4. Compute precise message boundaries (if tokenizer available)
+        5. Compute system prompt fingerprint
 
         Args:
             messages: List of message dicts with 'content' and 'role' keys
             previous_requests: List of previous message lists for comparison
+            prompt_token_ids: Pre-computed token IDs for boundary validation
 
         Returns:
             OptimizedRequest with reordered messages and metadata
@@ -203,7 +222,7 @@ class ContextPilotAdapter:
             Fail-safe: Returns original messages if optimization fails
         """
         try:
-            return self._do_optimize(messages, previous_requests or [])
+            return self._do_optimize(messages, previous_requests or [], prompt_token_ids)
         except Exception as e:
             logger.warning(f"Optimization failed, returning original messages: {e}")
             return self._create_fallback_result(messages)
@@ -211,7 +230,8 @@ class ContextPilotAdapter:
     def _do_optimize(
         self,
         messages: List[Dict[str, Any]],
-        previous_requests: List[List[Dict[str, Any]]]
+        previous_requests: List[List[Dict[str, Any]]],
+        prompt_token_ids: Optional[List[int]] = None,
     ) -> OptimizedRequest:
         """Internal optimization implementation."""
 
@@ -235,15 +255,26 @@ class ContextPilotAdapter:
         # Step 4: Build context_refs
         context_refs = {block.ref_id: block for block in current_blocks}
 
+        # Step 5: Compute system prompt fingerprint for cluster identification
+        system_prompt_hash = self._compute_system_prompt_hash(messages)
+
+        # Step 6: Compute precise message boundaries using tokenizer
+        message_boundaries = self._extract_message_boundaries(
+            reordered_messages, prompt_token_ids
+        )
+
         logger.debug(
             f"Optimized request: {len(messages)} messages, "
-            f"prefix_len={max_prefix_len}, refs={len(context_refs)}"
+            f"prefix_len={max_prefix_len}, refs={len(context_refs)}, "
+            f"system_hash={system_prompt_hash or 'none'}, "
+            f"boundaries={message_boundaries[:3]}{'...' if len(message_boundaries) > 3 else ''}"
         )
 
         return OptimizedRequest(
             messages=reordered_messages,
-            message_boundaries=[],  # Phase 2: token boundary computation
-            context_refs=context_refs
+            message_boundaries=message_boundaries,
+            context_refs=context_refs,
+            system_prompt_hash=system_prompt_hash,
         )
 
     def _parse_messages(self, messages: List[Dict[str, Any]]) -> List[ContextBlock]:
@@ -361,6 +392,102 @@ class ContextPilotAdapter:
         role = self._extract_role(msg)
         return {"content": content, "role": role}
 
+    def _extract_message_boundaries(
+        self,
+        messages: List[Dict[str, Any]],
+        prompt_token_ids: Optional[List[int]] = None,
+    ) -> List[int]:
+        """
+        Extract precise message boundaries using incremental chat template.
+
+        Uses apply_chat_template() on progressively longer message prefixes
+        to determine exact token ranges for each message, including all
+        special tokens (<|im_start|>, role tags, etc.).
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            prompt_token_ids: Pre-computed token IDs for boundary validation
+
+        Returns:
+            List of cumulative token counts marking each message boundary.
+            boundaries[i] = end token position of message i (exclusive).
+        """
+        if not messages or self._tokenizer is None:
+            return []
+
+        boundaries: List[int] = []
+        actual_token_count = len(prompt_token_ids) if prompt_token_ids else 0
+
+        try:
+            has_chat_template = hasattr(self._tokenizer, 'apply_chat_template')
+
+            for i in range(len(messages)):
+                msg_prefix = messages[:i + 1]
+
+                if has_chat_template:
+                    try:
+                        template_text = self._tokenizer.apply_chat_template(
+                            msg_prefix,
+                            tokenize=False,
+                            add_generation_prompt=(i == len(messages) - 1),
+                        )
+                        prefix_tokens = self._tokenizer.encode(template_text)
+                        current_token_count = len(prefix_tokens)
+                    except (TypeError, Exception):
+                        # Fallback if template doesn't support partial call
+                        break
+                else:
+                    text = "\n".join(
+                        f"{m.get('role', 'user')}: {m.get('content', '')}"
+                        for m in msg_prefix
+                    ) + "\nassistant:"
+                    prefix_tokens = self._tokenizer.encode(text)
+                    current_token_count = len(prefix_tokens)
+
+                boundaries.append(current_token_count)
+
+            # Validate monotonicity
+            if boundaries:
+                for j in range(1, len(boundaries)):
+                    if boundaries[j] <= boundaries[j - 1]:
+                        logger.warning(
+                            f"Non-monotonic boundary at msg {j}: "
+                            f"{boundaries[j]} <= {boundaries[j-1]}, falling back"
+                        )
+                        return []
+
+            # Align last boundary to actual token count
+            if boundaries and actual_token_count > 0:
+                if abs(boundaries[-1] - actual_token_count) > 5:
+                    logger.warning(
+                        f"Boundary mismatch: boundaries[-1]={boundaries[-1]} "
+                        f"vs actual={actual_token_count}, adjusting"
+                    )
+                boundaries[-1] = actual_token_count
+
+            return boundaries
+        except Exception as e:
+            logger.warning(f"Failed to extract message boundaries: {e}")
+            return []
+
+    def _compute_system_prompt_hash(
+        self,
+        messages: List[Dict[str, Any]]
+    ) -> Optional[str]:
+        """
+        Compute SHA256 fingerprint of the system prompt for cluster identification.
+
+        Returns:
+            First 16 hex chars of SHA256 hash of system prompt content,
+            or None if no system prompt found.
+        """
+        for msg in messages:
+            if self._extract_role(msg) == "system":
+                content = self._extract_content(msg)
+                if content:
+                    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+        return None
+
     def _create_fallback_result(
         self,
         messages: List[Dict[str, Any]]
@@ -369,7 +496,8 @@ class ContextPilotAdapter:
         return OptimizedRequest(
             messages=list(messages),
             message_boundaries=[],
-            context_refs={}
+            context_refs={},
+            system_prompt_hash=self._compute_system_prompt_hash(messages),
         )
 
 

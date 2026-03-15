@@ -119,7 +119,8 @@ class Request:
 
     # Prefix cache fields
     prompt_cache: Optional[List[Any]] = None  # Cached KV state from prefix cache
-    cached_tokens: int = 0  # Number of tokens retrieved from cache
+    cached_tokens: int = 0  # Number of tokens retrieved from cache (internal scheduling)
+    reported_cached_tokens: int = 0  # Tokens reported to API (preserved across N-1 fallback)
     remaining_tokens: Optional[List[int]] = None  # Tokens still needing processing
     skip_prefill: bool = False  # True if 100% cache hit, skip prefill computation
     skip_reason: str = 'none'  # 'full' | 'approximate' | 'none'
@@ -128,6 +129,16 @@ class Request:
     # Paged cache fields (for BlockAwarePrefixCache)
     block_table: Optional["BlockTable"] = None  # Block table for paged cache
     shared_prefix_blocks: int = 0  # Number of shared prefix blocks
+
+    # ContextPilot message alignment (Phase 3)
+    message_aligned: bool = False  # Cache boundary aligns with a message boundary
+    aligned_message_count: int = 0  # Number of messages fully within cache
+    total_message_count: int = 0  # Total messages in prompt
+    system_prompt_hash: Optional[str] = None  # sha256[:16] of system prompt for cluster identification
+
+    # Timing (set by scheduler for TPS reporting)
+    _submit_time: float = 0.0       # perf_counter when request entered scheduler
+    _first_token_time: float = 0.0  # perf_counter when first output token was produced
 
     # Multimodal content (images, video)
     images: Optional[List[Any]] = None
@@ -227,6 +238,14 @@ class RequestOutput:
     tool_calls: Optional[List[Dict[str, str]]] = None
     # Prefix cache stats
     cached_tokens: int = 0
+    # ContextPilot message alignment metadata
+    message_aligned: bool = False
+    aligned_message_count: int = 0
+    total_message_count: int = 0
+    system_prompt_hash: Optional[str] = None
+    # Timing (seconds, set by scheduler)
+    time_to_first_token: float = 0.0
+    generation_duration: float = 0.0
     # Error message (set when engine encounters an unrecoverable error)
     error: Optional[str] = None
 

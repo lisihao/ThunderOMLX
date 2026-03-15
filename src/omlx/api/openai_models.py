@@ -172,6 +172,8 @@ class Usage(BaseUsage):
     """
 
     cached_tokens: Optional[int] = None
+    # ContextPilot message alignment metadata (oMLX extension)
+    context_pilot: Optional[Dict[str, Any]] = None
     # Timing metrics (oMLX extension, seconds)
     model_load_duration: Optional[float] = None
     time_to_first_token: Optional[float] = None

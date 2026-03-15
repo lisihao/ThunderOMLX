@@ -1275,7 +1275,7 @@ class Scheduler:
         # Only initialize if paged cache is enabled (requires block-aware cache)
         if self.block_aware_cache is not None:
             try:
-                self.context_pilot = ContextPilotAdapter()
+                self.context_pilot = ContextPilotAdapter(tokenizer=self.tokenizer)
                 # Keep last 100 requests for prefix matching
                 self.request_history: deque = deque(maxlen=100)
                 logger.info("ContextPilot adapter initialized for cross-request cache optimization")
@@ -2588,6 +2588,9 @@ class Scheduler:
         if request.request_id in self.requests:
             raise ValueError(f"Request {request.request_id} already exists")
 
+        # Record submit time for TPS reporting
+        request._submit_time = time.perf_counter()
+
         # Tokenize if needed
         if request.prompt_token_ids is None:
             if isinstance(request.prompt, str):
@@ -2643,29 +2646,36 @@ class Scheduler:
             if request.vlm_image_hash:
                 extra_keys = (request.vlm_image_hash,)
 
-            # ContextPilot optimization (Phase 2: Message-aware Caching)
+            # ContextPilot optimization (Phase 3: Message-aware Cache Intelligence)
             message_boundaries = None
             if self.context_pilot is not None and request.messages:
                 try:
-                    # Optimize request using ContextPilot
+                    # Ensure adapter has tokenizer for boundary computation
+                    if self.context_pilot._tokenizer is None:
+                        self.context_pilot.set_tokenizer(self.tokenizer)
+
+                    # Optimize request — adapter now computes boundaries internally
                     optimized = self.context_pilot.optimize_request(
                         request.messages,
-                        previous_requests=list(self.request_history) if self.request_history else []
+                        previous_requests=list(self.request_history) if self.request_history else [],
+                        prompt_token_ids=request.prompt_token_ids,
                     )
 
-                    # Extract message boundaries for message-level caching
-                    message_boundaries = self._extract_message_boundaries(
-                        optimized["messages"],
-                        request.prompt_token_ids
-                    )
+                    # Use boundaries computed by adapter
+                    message_boundaries = optimized.get("message_boundaries") or None
+
+                    # Store system prompt fingerprint on request for API exposure
+                    request.system_prompt_hash = optimized.get("system_prompt_hash")
 
                     # Save to history
                     if self.request_history is not None:
                         self.request_history.append(optimized["messages"])
 
-                    logger.debug(
+                    logger.info(
                         f"ContextPilot: {len(optimized['messages'])} messages, "
-                        f"{len(optimized['context_refs'])} refs, boundaries={message_boundaries}"
+                        f"{len(optimized['context_refs'])} refs, "
+                        f"system_hash={optimized.get('system_prompt_hash', 'none')}, "
+                        f"boundaries={message_boundaries}"
                     )
                 except Exception as e:
                     logger.warning(f"ContextPilot optimization failed: {e}")
@@ -2692,6 +2702,11 @@ class Scheduler:
             cache_hit_ratio = cache_result['cache_hit_ratio']
             skip_reason = cache_result.get('skip_reason', 'none')
             approx_zero_fill_count = cache_result.get('approx_zero_fill_count', 0)
+
+            # ContextPilot message alignment metadata (always set, regardless of cache hit)
+            request.message_aligned = cache_result.get('message_aligned', False)
+            request.aligned_message_count = cache_result.get('aligned_message_count', 0)
+            request.total_message_count = cache_result.get('total_message_count', 0)
 
             # Log skip decision (DEBUG)
             logger.info(
@@ -2749,6 +2764,7 @@ class Scheduler:
                             # Stateful non-sliceable caches (Rotating/Arrays)
                             # cannot be safely converted from N to N-1 state
                             # without cache-type-specific logic.
+                            request.reported_cached_tokens = request.cached_tokens
                             if self.paged_cache_manager is not None:
                                 self.paged_cache_manager.delete_block_table(request.request_id)
                             request.prompt_cache = None
@@ -2756,10 +2772,15 @@ class Scheduler:
                             request.cached_tokens = 0
                             request.shared_prefix_blocks = 0
                             request.remaining_tokens = request.prompt_token_ids
+                            # CRITICAL: Reset skip_prefill — cache was cleared,
+                            # must do full prefill to avoid corrupted generation.
+                            request.skip_prefill = False
+                            request.skip_reason = 'none'
                             logger.debug(
                                 f"Request {request.request_id}: exact cache hit with "
                                 f"stateful cache type, falling back to full prefill "
-                                f"for deterministic kickoff"
+                                f"for deterministic kickoff "
+                                f"(reported_cached_tokens={request.reported_cached_tokens})"
                             )
                         elif self._trim_prompt_cache_for_generation(request.prompt_cache):
                             request.cached_tokens = max(0, request.cached_tokens - 1)
@@ -2774,6 +2795,7 @@ class Scheduler:
                             # Fallback to full recompute when cache layers cannot
                             # be safely trimmed by one token (e.g., non-trimmable
                             # recurrent state caches).
+                            request.reported_cached_tokens = request.cached_tokens
                             if self.paged_cache_manager is not None:
                                 self.paged_cache_manager.delete_block_table(request.request_id)
                             request.prompt_cache = None
@@ -2781,9 +2803,14 @@ class Scheduler:
                             request.cached_tokens = 0
                             request.shared_prefix_blocks = 0
                             request.remaining_tokens = request.prompt_token_ids
+                            # CRITICAL: Reset skip_prefill — cache was cleared,
+                            # must do full prefill to avoid corrupted generation.
+                            request.skip_prefill = False
+                            request.skip_reason = 'none'
                             logger.debug(
                                 f"Request {request.request_id}: exact cache hit could "
-                                f"not be trimmed safely, falling back to full prefill"
+                                f"not be trimmed safely, falling back to full prefill "
+                                f"(reported_cached_tokens={request.reported_cached_tokens})"
                             )
                     if block_table.num_tokens < original_tokens:
                         logger.debug(
@@ -2803,6 +2830,10 @@ class Scheduler:
                     if self.paged_cache_manager is not None:
                         self.paged_cache_manager.delete_block_table(request.request_id)
                     request.remaining_tokens = request.prompt_token_ids
+                    # CRITICAL: Reset skip_prefill — reconstruction failed,
+                    # must do full prefill to avoid corrupted generation.
+                    request.skip_prefill = False
+                    request.skip_reason = 'none'
                     logger.debug(
                         f"Request {request.request_id}: paged cache reconstruction failed, "
                         "released shared blocks"
@@ -2815,7 +2846,6 @@ class Scheduler:
 
         # ACO: Record request start time for inference metrics
         if self.aco is not None:
-            import time
             request._aco_start_time = time.perf_counter()
             request._aco_cache_hit_ratio = cache_hit_ratio if self.block_aware_cache else 0.0
             request._aco_skip_logic_type = skip_reason.upper() if can_skip_prefill else 'NONE'
@@ -2827,56 +2857,6 @@ class Scheduler:
         logger.debug(
             f"Added request {request.request_id} with {request.num_prompt_tokens} prompt tokens"
         )
-
-    def _extract_message_boundaries(
-        self,
-        messages: List[Dict[str, Any]],
-        tokens: List[int]
-    ) -> List[int]:
-        """
-        Extract message boundaries from messages and tokens.
-
-        Args:
-            messages: List of message dicts with 'role' and 'content'
-            tokens: The tokenized prompt (already computed)
-
-        Returns:
-            List of token positions marking message boundaries
-
-        Note:
-            This is a simplified implementation for Phase 2.
-            It estimates boundaries by tokenizing each message separately.
-            More accurate boundary extraction would require chat template awareness.
-        """
-        boundaries = []
-        cumulative_tokens = 0
-
-        try:
-            for msg in messages:
-                # Tokenize single message to estimate its token count
-                content = msg.get('content', '')
-                if isinstance(content, str):
-                    msg_text = f"{msg.get('role', 'user')}: {content}"
-                else:
-                    # Handle multimodal content (list of parts)
-                    msg_text = msg.get('role', 'user')
-
-                msg_tokens = self.tokenizer.encode(msg_text)
-                cumulative_tokens += len(msg_tokens)
-                boundaries.append(cumulative_tokens)
-
-            # Validate: total should not exceed actual token length
-            if boundaries and boundaries[-1] > len(tokens):
-                logger.warning(
-                    f"Message boundaries exceed token length: {boundaries[-1]} > {len(tokens)}, "
-                    f"using fallback (no boundaries)"
-                )
-                return []
-
-            return boundaries
-        except Exception as e:
-            logger.warning(f"Failed to extract message boundaries: {e}")
-            return []
 
     def _trim_prompt_cache_for_generation(self, cache_list: List[Any]) -> bool:
         """Trim each cache layer by one token for exact-hit generation kickoff."""
@@ -3410,6 +3390,15 @@ class Scheduler:
             ):
                 response.logprobs = None
 
+            # Record first token time for TPS reporting
+            if request.num_output_tokens == 1 and request._first_token_time == 0.0:
+                request._first_token_time = time.perf_counter()
+
+            # Compute timing for TPS reporting
+            now = time.perf_counter()
+            ttft = (request._first_token_time - request._submit_time) if request._first_token_time > 0 and request._submit_time > 0 else 0.0
+            gen_dur = (now - request._first_token_time) if request._first_token_time > 0 else 0.0
+
             # Create output
             output = RequestOutput(
                 request_id=request_id,
@@ -3418,7 +3407,13 @@ class Scheduler:
                 output_token_ids=list(request.output_token_ids),
                 prompt_tokens=request.num_prompt_tokens,
                 completion_tokens=request.num_output_tokens,
-                cached_tokens=request.cached_tokens,
+                cached_tokens=request.reported_cached_tokens or request.cached_tokens,
+                message_aligned=request.message_aligned,
+                aligned_message_count=request.aligned_message_count,
+                total_message_count=request.total_message_count,
+                system_prompt_hash=request.system_prompt_hash,
+                time_to_first_token=ttft,
+                generation_duration=gen_dur,
             )
 
             if not is_finished:
@@ -3655,7 +3650,6 @@ class Scheduler:
             # ACO: Log inference metrics before removing request
             if self.aco is not None and request is not None and hasattr(request, '_aco_start_time'):
                 try:
-                    import time
                     total_time_ms = (time.perf_counter() - request._aco_start_time) * 1000
 
                     # Calculate padding tokens if prompt padding was used

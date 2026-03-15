@@ -27,6 +27,14 @@ class GenerationOutput:
     tool_calls: Optional[List[Dict[str, Any]]] = None
     # Prefix cache stats
     cached_tokens: int = 0
+    # ContextPilot message alignment metadata
+    message_aligned: bool = False
+    aligned_message_count: int = 0
+    total_message_count: int = 0
+    system_prompt_hash: Optional[str] = None
+    # Timing (seconds, from scheduler)
+    time_to_first_token: float = 0.0
+    generation_duration: float = 0.0
 
 
 class BaseEngine(ABC):

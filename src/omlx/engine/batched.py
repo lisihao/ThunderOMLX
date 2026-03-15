@@ -303,6 +303,7 @@ class BatchedEngine(BaseEngine):
         output = await self._engine.generate(
             prompt=prompt,
             sampling_params=sampling_params,
+            messages=kwargs.get("messages"),
         )
 
         text = clean_special_tokens(output.output_text)
@@ -314,6 +315,12 @@ class BatchedEngine(BaseEngine):
             finish_reason=output.finish_reason,
             tool_calls=output.tool_calls,
             cached_tokens=output.cached_tokens,
+            message_aligned=output.message_aligned,
+            aligned_message_count=output.aligned_message_count,
+            total_message_count=output.total_message_count,
+            system_prompt_hash=output.system_prompt_hash,
+            time_to_first_token=output.time_to_first_token,
+            generation_duration=output.generation_duration,
         )
 
     async def stream_generate(
@@ -393,6 +400,12 @@ class BatchedEngine(BaseEngine):
                     finish_reason=output.finish_reason,
                     tool_calls=output.tool_calls,
                     cached_tokens=output.cached_tokens,
+                    message_aligned=output.message_aligned,
+                    aligned_message_count=output.aligned_message_count,
+                    total_message_count=output.total_message_count,
+                    system_prompt_hash=output.system_prompt_hash,
+                    time_to_first_token=output.time_to_first_token,
+                    generation_duration=output.generation_duration,
                 )
         except GeneratorExit:
             # Client disconnected
