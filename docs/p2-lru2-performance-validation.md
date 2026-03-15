@@ -215,14 +215,61 @@
 
 ---
 
+## Prompt Padding 性能验证
+
+### 测试配置
+
+| 参数 | Without Padding | With Padding |
+|------|-----------------|--------------|
+| `enable_prompt_padding` | False | True |
+| `max_padding_tokens` | N/A | 64 |
+| 其他参数 | 相同 | 相同 |
+
+### 性能对比
+
+| Agent | Prompt 长度 | **Without Padding** | **With Padding** | 差异 |
+|-------|-------------|---------------------|------------------|------|
+| **researcher** | ~1320 tokens | 3.8x | **3.9x** | +0.1x ✅ |
+| **coder** | ~860 tokens | 3.3x | **3.5x** | +0.2x ✅ |
+| **tester** | ~710 tokens | 1.6x | **1.5x** | -0.1x ⚠️ |
+| **analyst** | ~640 tokens | 1.6x | **Timeout** | N/A ❌ |
+| **pm** | ~445 tokens | 1.5x | **Timeout** | N/A ❌ |
+
+### 关键发现
+
+**✅ 正面效果**：
+- **长 prompt** (1320 tokens) 有**轻微提升** (+0.1x)
+- **中等 prompt** (860 tokens) 有**明显提升** (+0.2x)
+- 对 researcher 和 coder 有效
+
+**⚠️ 负面效果**：
+- **短 prompt** (710 tokens 及以下) **无提升或负面**
+- **随机长请求** 触发超时（4449 tokens + padding > 120s）
+
+**🛡️ 保护机制**：
+- 增加超长 prompt 检查（>3000 tokens 跳过 padding）
+- 避免边际收益为零的场景增加计算负担
+
+### 结论
+
+**Prompt Padding 不是性能银弹，而是微优化**：
+- **最佳场景**: 中等 prompt (800-1500 tokens) → **+0.1-0.2x**
+- **无效场景**: 短 prompt (<700 tokens) → **0x 或负收益**
+- **风险场景**: 超长 prompt (>4000 tokens) → **Timeout 风险**（已增加保护）
+
+**建议**：
+- ✅ **保持默认启用**：对中长 prompt 有轻微提升
+- ✅ **保护机制生效**：超长 prompt 自动跳过 padding
+
+---
+
 ## 下一步优化方向
 
-基于 P2 验证结果：
+基于 P2 + Prompt Padding 验证结果：
 
 | 优化项 | 预期收益 | 优先级 |
 |--------|----------|--------|
 | **P4-C: Metal GPU 利用率优化** | 进一步降低延迟 | ⭐⭐⭐ |
-| **Prompt Padding + Skip Logic** | 提升 FULL SKIP 触发率到 90%+ | ⭐⭐⭐ |
 | **子 block 缓存机制** | 处理 partial cache 场景 | ⭐⭐ |
 | **增量缓存机制** | Delta 编码减少内存占用 | ⭐⭐ |
 | **Speculative Decoding** | 2-3x decode 加速 | ⭐ |

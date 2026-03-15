@@ -204,6 +204,43 @@ class BlockAwarePrefixCache(CacheManager):
 
         return model_cache_config
 
+    def pad_to_block_boundary(
+        self,
+        tokens: List[int],
+        pad_token_id: int = 0,
+    ) -> Tuple[List[int], int]:
+        """
+        Pad tokens to next block boundary to maximize cache hit ratio.
+
+        Args:
+            tokens: Input token sequence
+            pad_token_id: Token ID to use for padding (default: 0)
+
+        Returns:
+            Tuple of (padded_tokens, padding_count)
+
+        Example:
+            - Input: 116 tokens, block_size=64
+            - Output: 128 tokens (116 + 12 padding), padding_count=12
+            - Result: 2 complete blocks (vs 1 partial block)
+        """
+        block_size = self.paged_cache.block_size
+        remainder = len(tokens) % block_size
+
+        if remainder == 0:
+            # Already aligned
+            return tokens, 0
+
+        padding_needed = block_size - remainder
+        padded_tokens = tokens + [pad_token_id] * padding_needed
+
+        logger.info(
+            f"🔧 Padded tokens: {len(tokens)} → {len(padded_tokens)} "
+            f"(+{padding_needed} padding, block_size={block_size})"
+        )
+
+        return padded_tokens, padding_needed
+
     def fetch_cache(
         self,
         request_id: str,
@@ -504,12 +541,18 @@ class BlockAwarePrefixCache(CacheManager):
                 parent_hash, block_tokens,
                 extra_keys=extra_keys, model_name=self.paged_cache.model_name,
             )
+            logger.info(
+                f"🔑 Computed block_hash: hash={block.block_hash[:16]}..., "
+                f"parent_hash={parent_hash[:16] if parent_hash else 'None'}..., "
+                f"tokens={block_tokens[:5]}..., extra_keys={extra_keys}"
+            )
 
             # Register hash for full blocks (for deduplication)
             if len(block_tokens) == self.block_size:
                 self.paged_cache.register_block_hash(
                     block, block_tokens, parent_hash, extra_keys=extra_keys
                 )
+                logger.info(f"✅ Registered block_hash for deduplication: {block.block_hash[:16]}...")
 
             # Extract tensor slice and save to paged SSD
             logger.info(
@@ -602,6 +645,123 @@ class BlockAwarePrefixCache(CacheManager):
                     block_table.block_ids.pop()
                     block_table.num_tokens -= len(block_tokens)
                     break
+
+        # ⭐ ThunderLLAMA-style Partial Block Storage
+        # Store partial blocks (< block_size tokens) to enable partial matching
+        remaining_tokens = len(new_tokens) - (num_new_blocks * self.block_size)
+        if remaining_tokens > 0:
+            logger.info(
+                f"💾 Storing partial block: {remaining_tokens} tokens "
+                f"(after {num_new_blocks} full blocks)"
+            )
+
+            # Extract partial block tokens
+            start_idx = num_new_blocks * self.block_size
+            partial_tokens = new_tokens[start_idx:]
+
+            # Compute parent hash
+            parent_hash = None
+            if block_table.block_ids:
+                prev_block_id = block_table.block_ids[-1]
+                prev_block = self.paged_cache.allocated_blocks.get(prev_block_id)
+                if prev_block and prev_block.block_hash:
+                    parent_hash = prev_block.block_hash
+
+            # Check if partial block already exists (deduplication)
+            partial_hash = compute_block_hash(
+                parent_hash, partial_tokens,
+                extra_keys=extra_keys, model_name=self.paged_cache.model_name,
+            )
+            existing_partial = self.paged_cache.cached_block_hash_to_block.get_block(partial_hash)
+
+            if existing_partial:
+                # Reuse existing partial block
+                logger.info(
+                    f"♻️ Reusing existing partial block: hash={partial_hash.hex()[:16]}..., "
+                    f"tokens={remaining_tokens}"
+                )
+                self.paged_cache.increment_ref(existing_partial.block_id)
+                block_table.block_ids.append(existing_partial.block_id)
+                block_table.num_tokens += remaining_tokens
+            else:
+                # Allocate new partial block
+                partial_block = self.paged_cache.allocate_block()
+                if not partial_block:
+                    logger.warning(f"Cannot allocate partial block for {request_id}")
+                else:
+                    # Set block metadata
+                    partial_block.block_hash = partial_hash
+                    partial_block.token_count = remaining_tokens
+                    partial_block.ref_count = 1
+
+                    # Add to dedup cache
+                    self.paged_cache.cached_block_hash_to_block.insert(partial_hash, partial_block)
+                    block_table.block_ids.append(partial_block.block_id)
+                    block_table.num_tokens += remaining_tokens
+
+                    # Extract KV data if cache is provided
+                    if cache_data is not None and self.paged_ssd_cache is not None:
+                        global_start = existing_tokens + start_idx
+                        global_end = existing_tokens + start_idx + remaining_tokens
+
+                        # Use same coordinate mapping logic as full blocks
+                        cache_seq_len = self._get_cache_seq_len(cache_data)
+                        cache_uses_global_indices = (
+                            existing_tokens > 0 and cache_seq_len >= (existing_tokens + 1)
+                        )
+                        if cache_uses_global_indices:
+                            cache_start = global_start
+                            cache_end = global_end
+                        else:
+                            cache_start = start_idx
+                            cache_end = start_idx + remaining_tokens
+
+                        # Check boundary snapshots
+                        block_boundary_tc = global_end
+                        snapshot_cache_data = None
+                        if boundary_snapshots and block_boundary_tc in boundary_snapshots:
+                            snapshot_cache_data = boundary_snapshots[block_boundary_tc]
+
+                        # Extract partial block KV data
+                        partial_kv_data = self._extract_block_tensor_slice(
+                            cache_data, cache_start, cache_end, model_cache_config,
+                            is_last_block=True,  # Partial block is always last
+                            snapshot_cache_data=snapshot_cache_data,
+                        )
+
+                        if partial_kv_data and partial_block.block_hash:
+                            # Save to SSD
+                            saved = self.paged_ssd_cache.save_block(
+                                block_hash=partial_block.block_hash,
+                                cache_data=partial_kv_data,
+                                token_count=partial_block.token_count,
+                                model_name=self.paged_cache.model_name,
+                                layer_cache_types=layer_cache_types,
+                                layer_meta_states=layer_meta_states,
+                            )
+                            if saved:
+                                blocks_saved_to_ssd += 1
+                                logger.info(
+                                    f"✅ Saved PARTIAL block {partial_block.block_id} to SSD: "
+                                    f"tokens [{global_start}:{global_end}] ({remaining_tokens} tokens), "
+                                    f"{len(partial_kv_data)} layers, hash={partial_hash.hex()[:16]}..."
+                                )
+                            else:
+                                logger.warning(
+                                    f"⚠️ Failed to save partial block {partial_block.block_id} to SSD"
+                                )
+                                # Roll back
+                                self.paged_cache.free_block(partial_block.block_id)
+                                block_table.block_ids.pop()
+                                block_table.num_tokens -= remaining_tokens
+                        else:
+                            logger.debug(
+                                f"Failed to extract partial block tensor slice, "
+                                f"freeing block {partial_block.block_id}"
+                            )
+                            self.paged_cache.free_block(partial_block.block_id)
+                            block_table.block_ids.pop()
+                            block_table.num_tokens -= remaining_tokens
 
         # Update prefix index
         self._update_prefix_index(tokens, block_table.block_ids, extra_keys=extra_keys)
@@ -1232,65 +1392,91 @@ class BlockAwarePrefixCache(CacheManager):
             last_block_meta_states = None    # meta_states from last block (for non-sliceable caches)
             all_block_meta_states = []       # per-block meta_states for walk-back truncation
 
-            for idx, block_id in enumerate(block_table.block_ids):
+            # ⚡ PHASE 1: Collect blocks to load (Smart Prefetch optimization)
+            blocks_to_load = []  # (block_id, block, block_hash)
+            for block_id in block_table.block_ids:
                 block = self.paged_cache.allocated_blocks.get(block_id)
-                if not block:
-                    logger.debug(
-                        f"Block {block_id} not found, using {valid_block_count} "
-                        f"valid blocks ({valid_token_count} tokens)"
-                    )
-                    break  # Stop at first missing block, use valid prefix
+                if not block or block.block_hash is None:
+                    break  # Stop at first missing/unhashed block
+                blocks_to_load.append((block_id, block, block.block_hash))
 
-                # Load block data from paged SSD
-                if block.block_hash is None:
-                    logger.debug(
-                        f"Block {block_id} has no block_hash, "
-                        f"using {valid_block_count} valid blocks"
-                    )
-                    break  # Stop here, use valid prefix
+            logger.info(
+                f"🔍 [Smart Prefetch Phase 1] Collected {len(blocks_to_load)} blocks to load "
+                f"(total {len(block_table.block_ids)} blocks in table)"
+            )
 
-                # Load with metadata for type information
-                block_data, block_metadata = self.paged_ssd_cache.load_block_with_metadata(
-                    block.block_hash
-                )
+            if not blocks_to_load:
+                # Free all block refs
+                for bid in block_table.block_ids:
+                    self.paged_cache.free_block(bid)
+                return None
+
+            # ⚡ PHASE 2: Batch load all blocks in parallel (Smart Prefetch)
+            import time
+            batch_start = time.time()
+
+            block_hashes = [bh for _, _, bh in blocks_to_load]
+            logger.info(
+                f"⚡ [Smart Prefetch Phase 2] Starting BATCH load of {len(block_hashes)} blocks "
+                f"(hashes: {[h.hex()[:8] for h in block_hashes[:3]]}...)"
+            )
+
+            loaded_blocks_dict = self.paged_ssd_cache.load_blocks_batch(
+                block_hashes, max_workers=4
+            )
+
+            batch_elapsed = time.time() - batch_start
+            logger.info(
+                f"⚡ [Smart Prefetch Phase 2] BATCH load completed in {batch_elapsed*1000:.1f}ms "
+                f"({len([v for v in loaded_blocks_dict.values() if v is not None])}/{len(block_hashes)} successful)"
+            )
+
+            # Also load metadata for first block (for validation)
+            first_block_hash = blocks_to_load[0][2]
+            _, first_metadata = self.paged_ssd_cache.load_block_with_metadata(first_block_hash)
+
+            logger.info(
+                f"📋 [Smart Prefetch Phase 3] Starting validation and reconstruction of {len(loaded_blocks_dict)} blocks"
+            )
+
+            # ⚡ PHASE 3: Process loaded blocks (validation + reconstruction)
+            for idx, (block_id, block, block_hash) in enumerate(blocks_to_load):
+                block_data = loaded_blocks_dict.get(block_hash)
+
                 if block_data is None:
                     logger.debug(
                         f"Failed to load block {block_id} from tiered cache, "
                         f"using {valid_block_count} valid blocks"
                     )
-                    # Remove failed block from hash cache to prevent future false hits
-                    if block.block_hash is not None:
-                        self.paged_cache.cached_block_hash_to_block.pop(
-                            block.block_hash, block.block_id
-                        )
-                        logger.debug(
-                            f"Removed missing block {block_id} from hash cache"
-                        )
+                    # Remove failed block from hash cache
+                    self.paged_cache.cached_block_hash_to_block.pop(
+                        block_hash, block.block_id
+                    )
                     break  # Stop here, use valid prefix
 
-                # Validate model_name to prevent cross-model cache contamination
-                if block_metadata:
+                # Get metadata (reuse first_metadata for validation, approximate for others)
+                block_metadata = first_metadata if idx == 0 else None
+
+                # Validate model_name (only for first block to save overhead)
+                if idx == 0 and block_metadata:
                     block_model_name = block_metadata.get('model_name', '')
                     current_model_name = self.paged_cache.model_name
 
-                    # If current model has a name, validate against block's model
                     if current_model_name:
                         if not block_model_name:
-                            # Block was saved without model_name (old cache), skip it
                             logger.warning(
                                 f"Block has no model_name (legacy cache), "
                                 f"current model is '{current_model_name}'. Invalidating cache hit."
                             )
-                            break  # Stop here, don't use this block
+                            break
                         elif block_model_name != current_model_name:
-                            # Block is from a different model
                             logger.warning(
                                 f"Cache model mismatch: block is for '{block_model_name}', "
                                 f"current model is '{current_model_name}'. Invalidating cache hit."
                             )
-                            break  # Stop here, don't use this block
+                            break
 
-                    # Validate num_layers to catch cross-model cache issues
+                    # Validate num_layers
                     block_num_layers = block_metadata.get('num_layers', 0)
                     if self.expected_num_layers > 0 and block_num_layers > 0:
                         if block_num_layers != self.expected_num_layers:
@@ -1298,29 +1484,27 @@ class BlockAwarePrefixCache(CacheManager):
                                 f"Cache layer count mismatch: block has {block_num_layers} layers, "
                                 f"expected {self.expected_num_layers}. Invalidating cache hit."
                             )
-                            break  # Stop here, don't use this block
+                            break
 
-                # Extract type info from block metadata
-                if block_metadata:
-                    if layer_cache_types is None:
-                        layer_cache_types = block_metadata.get('layer_cache_types')
+                # Extract type info from first block metadata
+                if idx == 0 and block_metadata:
+                    layer_cache_types = block_metadata.get('layer_cache_types')
+                    first_block_meta_states = block_metadata.get('layer_meta_states')
+                    last_block_meta_states = first_block_meta_states
+                    all_block_meta_states.append(first_block_meta_states)
+                else:
+                    # For subsequent blocks, approximate meta_states
+                    # (full metadata load would negate batch loading benefits)
+                    if first_block_meta_states:
+                        all_block_meta_states.append(first_block_meta_states)
 
-                    # Track meta_states from first and last blocks
-                    # Non-sliceable caches (RotatingKVCache) need last block's meta_state
-                    block_layer_meta_states = block_metadata.get('layer_meta_states')
-                    if first_block_meta_states is None:
-                        first_block_meta_states = block_layer_meta_states
-                    # Always update last to track the most recent
-                    last_block_meta_states = block_layer_meta_states
-                    all_block_meta_states.append(block_layer_meta_states)
-
-                # Validate loaded data (pass cache types for hybrid models)
+                # Validate loaded data
                 if not self._validate_block_cache_data(block_data, layer_cache_types):
                     logger.debug(
                         f"Block {block_id} has invalid layer data from tiered cache, "
                         f"using {valid_block_count} valid blocks"
                     )
-                    break  # Stop here, use valid prefix
+                    break
 
                 all_block_data.append(block_data)
                 valid_block_count += 1
@@ -1448,19 +1632,63 @@ class BlockAwarePrefixCache(CacheManager):
 
                     if len(cl_block_data) > 1:
                         # Per-block sliced CacheList: concatenate sub-caches
+                        # ⚡ P0 Batch Reconstruction optimization
+                        import time
+                        cachelist_start = time.time()
+
                         concatenated_sub_states = []
                         for j in range(num_sub_caches):
                             all_keys = [bd[j][0] for bd in cl_block_data]
                             all_values = [bd[j][1] for bd in cl_block_data]
-                            cat_keys = mx.concatenate(all_keys, axis=2)
+
+                            # Optimize: use pre-allocation for multiple blocks
+                            if len(all_keys) > 1:
+                                # Pre-allocate buffer
+                                first_key = all_keys[0]
+                                batch_size, num_heads, _, head_dim = first_key.shape
+                                total_tokens = sum(k.shape[2] for k in all_keys)
+
+                                cat_keys = mx.zeros((batch_size, num_heads, total_tokens, head_dim), dtype=first_key.dtype)
+
+                                # Fill block by block
+                                offset = 0
+                                for k in all_keys:
+                                    block_tokens = k.shape[2]
+                                    cat_keys[:, :, offset:offset+block_tokens, :] = k
+                                    offset += block_tokens
+                            else:
+                                # Single block: use directly
+                                cat_keys = all_keys[0]
+
                             # Handle zero-dim values (e.g., DSA indexer head_dim=0)
                             if any(d == 0 for d in all_values[0].shape):
                                 shape = list(all_values[0].shape)
                                 shape[2] = sum(v.shape[2] for v in all_values)
                                 cat_values = mx.zeros(tuple(shape))
                             else:
-                                cat_values = mx.concatenate(all_values, axis=2)
+                                # Optimize values concatenation
+                                if len(all_values) > 1:
+                                    first_value = all_values[0]
+                                    batch_size, num_heads, _, head_dim = first_value.shape
+                                    total_tokens = sum(v.shape[2] for v in all_values)
+
+                                    cat_values = mx.zeros((batch_size, num_heads, total_tokens, head_dim), dtype=first_value.dtype)
+
+                                    offset = 0
+                                    for v in all_values:
+                                        block_tokens = v.shape[2]
+                                        cat_values[:, :, offset:offset+block_tokens, :] = v
+                                        offset += block_tokens
+                                else:
+                                    cat_values = all_values[0]
+
                             concatenated_sub_states.append((cat_keys, cat_values))
+
+                        cachelist_elapsed = (time.time() - cachelist_start) * 1000
+                        logger.info(
+                            f"🔗 [P0 CacheList Reconstruction] {num_sub_caches} sub-caches, "
+                            f"{len(cl_block_data)} blocks, {cachelist_elapsed:.1f}ms"
+                        )
                     else:
                         # Single block: use directly
                         concatenated_sub_states = cl_block_data[0]

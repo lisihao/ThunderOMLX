@@ -1,0 +1,99 @@
+{
+  "generation_timestamp": "2026-03-14T15:28:19.614494",
+  "simulation_duration_days": 7,
+  "total_requests": 2209,
+  "agents": {
+    "researcher": {
+      "system_prompt_range": [
+        800,
+        1500
+      ],
+      "user_query_range": [
+        50,
+        200
+      ],
+      "cache_hit_range": [
+        0.85,
+        0.95
+      ],
+      "initial_block_size": 128,
+      "usage_pattern": "working_hours",
+      "request_frequency": 0.3
+    },
+    "coder": {
+      "system_prompt_range": [
+        600,
+        1000
+      ],
+      "user_query_range": [
+        20,
+        100
+      ],
+      "cache_hit_range": [
+        0.75,
+        0.88
+      ],
+      "initial_block_size": 96,
+      "usage_pattern": "heavy_working_hours",
+      "request_frequency": 0.35
+    },
+    "analyst": {
+      "system_prompt_range": [
+        400,
+        700
+      ],
+      "user_query_range": [
+        30,
+        150
+      ],
+      "cache_hit_range": [
+        0.65,
+        0.8
+      ],
+      "initial_block_size": 64,
+      "usage_pattern": "all_day",
+      "request_frequency": 0.15
+    },
+    "pm": {
+      "system_prompt_range": [
+        300,
+        500
+      ],
+      "user_query_range": [
+        10,
+        80
+      ],
+      "cache_hit_range": [
+        0.8,
+        0.92
+      ],
+      "initial_block_size": 64,
+      "usage_pattern": "working_hours",
+      "request_frequency": 0.1
+    },
+    "tester": {
+      "system_prompt_range": [
+        500,
+        800
+      ],
+      "user_query_range": [
+        15,
+        100
+      ],
+      "cache_hit_range": [
+        0.7,
+        0.85
+      ],
+      "initial_block_size": 80,
+      "usage_pattern": "working_hours",
+      "request_frequency": 0.1
+    }
+  },
+  "optimization_opportunities": {
+    "researcher": "\u8fc7\u5ea6 padding\uff08block_size=128 vs optimal=64\uff09",
+    "coder": "\u8f7b\u5ea6 padding\uff08block_size=96 vs optimal=64\uff09",
+    "analyst": "\u914d\u7f6e\u5408\u7406\uff08block_size=64\uff09",
+    "pm": "\u914d\u7f6e\u5408\u7406\uff08block_size=64\uff09",
+    "tester": "\u8f7b\u5ea6 padding\uff08block_size=80 vs optimal=64\uff09"
+  }
+}

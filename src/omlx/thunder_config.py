@@ -49,6 +49,32 @@ class AsyncIOConfig(BaseModel):
     read_buffer_kb: int = Field(default=256, ge=64, le=1024)
 
 
+class AdaptiveCacheConfig(BaseModel):
+    """自适应缓存优化配置"""
+    enable_adaptive_optimization: bool = Field(
+        default=False, description="启用自适应缓存优化（默认关闭）"
+    )
+    adaptive_cache_db_path: Path = Field(
+        default=Path("~/.cache/thunderomlx/adaptive_cache.db").expanduser(),
+        description="自适应缓存数据库路径"
+    )
+    enable_auto_apply: bool = Field(
+        default=False, description="自动应用优化建议（默认关闭，仅生成报告）"
+    )
+    analysis_interval_hours: int = Field(
+        default=1, ge=1, le=24, description="分析间隔（小时）"
+    )
+    min_samples_for_analysis: int = Field(
+        default=20, ge=10, le=1000, description="分析所需最小样本数"
+    )
+
+    @field_validator("adaptive_cache_db_path", mode="before")
+    @classmethod
+    def expand_path(cls, v: str | Path) -> Path:
+        """扩展 ~ 路径"""
+        return Path(v).expanduser()
+
+
 class ThunderOMLXConfig(BaseSettings):
     """ThunderOMLX 统一配置"""
 
@@ -66,6 +92,7 @@ class ThunderOMLXConfig(BaseSettings):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     serialization: SerializationConfig = Field(default_factory=SerializationConfig)
     async_io: AsyncIOConfig = Field(default_factory=AsyncIOConfig)
+    adaptive_cache: AdaptiveCacheConfig = Field(default_factory=AdaptiveCacheConfig)
 
     # 性能目标
     target_generation_tps: int = Field(default=250, ge=100, le=1000)

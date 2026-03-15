@@ -14,6 +14,7 @@ The scheduler follows vLLM's design with:
 import copy
 import gc
 import logging
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -900,16 +901,16 @@ class SchedulerConfig:
     prefill_step_size: int = 2048
 
     # Paged cache settings (internal defaults)
-    paged_cache_block_size: int = 256  # Tokens per block
+    paged_cache_block_size: int = 64  # Tokens per block (降低以支持短 prompt 缓存)
     max_cache_blocks: Optional[int] = None  # Auto-calculated from available KV cache memory
     initial_cache_blocks: int = 256  # Starting blocks (grows dynamically to max_cache_blocks)
 
     # paged SSD cache settings (oMLX only supports paged SSD-based caching)
     # When paged_ssd_cache_dir is set, oMLX stores KV cache on paged SSD for prefix reuse.
     # When None, no oMLX caching (mlx-lm BatchGenerator manages KV internally).
-    paged_ssd_cache_dir: Optional[str] = str(Path.home() / ".cache" / "omlx" / "paged_ssd")  # ✅ FORCED ENABLE for testing
+    paged_ssd_cache_dir: Optional[str] = str(Path.home() / ".cache" / "omlx" / "paged_ssd")  # Internal SSD (APFS)
     paged_ssd_cache_max_size: int = 50 * 1024 * 1024 * 1024  # 50GB for testing
-    hot_cache_max_size: int = 8 * 1024 * 1024 * 1024  # 8GB hot cache for testing
+    hot_cache_max_size: int = 0  # Disable hot cache to test P1 lz4 compression
 
     # Model identification (for cache isolation between different models)
     model_name: str = ""  # OpenAI API model name (e.g., "mlx-community/Llama-3.2-3B")
@@ -920,7 +921,7 @@ class SchedulerConfig:
 
     # Skip Logic testing flag (disable ArraysCache block_size auto-enlargement)
     # When True, allows testing Skip Logic with small block sizes on ArraysCache models
-    disable_block_size_enlargement: bool = False
+    disable_block_size_enlargement: bool = True  # ⚡ 默认禁用 ArraysCache 自动提升，保持 block_size=256 以支持短 prompt 缓存
 
     # ⚡ 方案 2: 动态 block_size 选择（根据使用场景）
     # ArraysCache 模型的目标 block_size（替代固定的 1024）
@@ -932,8 +933,13 @@ class SchedulerConfig:
 
     # ⚡ 策略 1: Prompt Padding 到 block 边界（提高 Skip Logic 触发率）
     # 将 prompt 填充到最近的 block 边界，确保 100% cache hit
-    enable_prompt_padding: bool = False  # 默认关闭（避免影响现有行为）
+    enable_prompt_padding: bool = True  # 启用 Prompt Padding 优化
     max_padding_tokens: int = 64  # 最大填充 token 数（避免过度填充）
+
+    # ⚡ Adaptive Cache Optimization（自适应缓存优化）
+    # Phase 1: 数据收集基础设施
+    enable_adaptive_cache_optimization: bool = False  # 默认关闭（不影响现有功能）
+    adaptive_cache_db_path: str = "~/.cache/thunderomlx/adaptive_cache.db"  # 数据库路径
 
 
 @dataclass
@@ -1174,6 +1180,104 @@ class Scheduler:
 
         # Step counter for periodic cleanup
         self._step_counter = 0
+
+        # Adaptive Cache Optimizer (Phase 1: Data Collection)
+        self.aco: Optional["AdaptiveCacheOptimizer"] = None
+        self._adaptive_thread: Optional[threading.Thread] = None
+        self._stop_adaptive_loop = threading.Event()
+
+        if self.config.enable_adaptive_cache_optimization:
+            try:
+                from .adaptive_cache_optimizer import AdaptiveCacheOptimizer
+                self.aco = AdaptiveCacheOptimizer(self.config.adaptive_cache_db_path)
+                logger.info(
+                    f"Adaptive Cache Optimizer enabled: {self.config.adaptive_cache_db_path}"
+                )
+
+                # Start adaptive optimization loop if auto-apply is enabled
+                if self.config.enable_auto_apply:
+                    self._start_adaptive_optimization_loop()
+
+            except Exception as e:
+                logger.error(f"Failed to initialize Adaptive Cache Optimizer: {e}")
+                self.aco = None
+
+    def _start_adaptive_optimization_loop(self):
+        """Start background thread for adaptive optimization."""
+        if not self.aco:
+            return
+
+        logger.info(
+            f"Starting adaptive optimization loop (interval: {self.config.analysis_interval_hours}h)"
+        )
+
+        self._adaptive_thread = threading.Thread(
+            target=self._adaptive_optimization_loop,
+            daemon=True,
+            name="AdaptiveCacheOptimizerLoop"
+        )
+        self._adaptive_thread.start()
+
+    def _adaptive_optimization_loop(self):
+        """
+        Background loop for periodic analysis and optimization.
+
+        Runs every N hours (configurable), analyzes collected data,
+        and applies optimizations if significant improvements are found.
+        """
+        interval_seconds = self.config.analysis_interval_hours * 3600
+
+        while not self._stop_adaptive_loop.is_set():
+            try:
+                # Wait for interval or stop signal
+                if self._stop_adaptive_loop.wait(timeout=interval_seconds):
+                    break
+
+                logger.info("Running adaptive optimization analysis...")
+
+                # Get recommendations
+                recommendations = self.aco.get_recommendations(
+                    min_samples=self.config.min_samples_for_analysis
+                )
+
+                if not recommendations:
+                    logger.info("No optimization opportunities found")
+                    continue
+
+                # Apply each recommendation
+                for rec in recommendations:
+                    agent_id = rec['agent_id']
+                    old_block_size = rec['current_block_size']
+                    new_block_size = rec['recommended_block_size']
+                    improvement = rec['improvement_pct']
+                    reason = rec['reason']
+
+                    logger.info(
+                        f"Applying optimization for {agent_id}: "
+                        f"block_size {old_block_size} → {new_block_size} "
+                        f"(improvement: {improvement:.1f}%)"
+                    )
+
+                    # Record configuration change
+                    self.aco.apply_optimization(
+                        agent_id=agent_id,
+                        new_block_size=new_block_size,
+                        old_block_size=old_block_size,
+                        reason=reason
+                    )
+
+                    # Apply to scheduler if this is a global setting
+                    # Note: For per-agent block_size, we would need agent-specific configs
+                    # For now, we just log and record to database
+                    logger.info(
+                        f"Optimization recorded to database. "
+                        f"Manual application may be required for per-agent configs."
+                    )
+
+            except Exception as e:
+                logger.error(f"Error in adaptive optimization loop: {e}")
+
+        logger.info("Adaptive optimization loop stopped")
 
     def _calculate_max_blocks(self) -> int:
         """
@@ -2318,7 +2422,13 @@ class Scheduler:
             block_size = self.config.paged_cache_block_size
             remainder = original_len % block_size
 
-            if remainder > 0:
+            # 🛡️ 保护机制：超长 prompt 跳过 padding（避免 timeout 风险）
+            if original_len > 3000:
+                logger.info(
+                    f"⚠️ Skip Prompt Padding: prompt too long ({original_len} tokens), "
+                    f"padding may increase timeout risk"
+                )
+            elif remainder > 0:
                 padding_needed = block_size - remainder
 
                 # 限制 padding 数量（避免过度填充）
@@ -2353,10 +2463,16 @@ class Scheduler:
             if request.vlm_image_hash:
                 extra_keys = (request.vlm_image_hash,)
 
+            # ⭐ 策略 1: Pad prompt to block boundary (暂时禁用，测试部分匹配)
+            # padded_tokens, padding_count = self.block_aware_cache.pad_to_block_boundary(
+            #     request.prompt_token_ids,
+            #     pad_token_id=0,
+            # )
+
             # Use match_cache_with_skip_logic for Full Skip detection
             # Use 90% threshold (was 95%) for more practical Approximate Skip triggering
             cache_result = self.block_aware_cache.match_cache_with_skip_logic(
-                request.prompt_token_ids,
+                request.prompt_token_ids,  # ← Use original tokens (部分匹配会处理)
                 extra_keys=extra_keys,
                 approx_threshold=0.90,  # P0-2: 90% threshold for Approximate Skip
             )
@@ -2487,6 +2603,13 @@ class Scheduler:
         else:
             # No paged SSD cache configured - process all tokens
             request.remaining_tokens = request.prompt_token_ids
+
+        # ACO: Record request start time for inference metrics
+        if self.aco is not None:
+            import time
+            request._aco_start_time = time.perf_counter()
+            request._aco_cache_hit_ratio = cache_hit_ratio if self.block_aware_cache else 0.0
+            request._aco_skip_logic_type = skip_reason.upper() if can_skip_prefill else 'NONE'
 
         # Add to tracking
         self.requests[request.request_id] = request
@@ -3181,14 +3304,21 @@ class Scheduler:
                             # generation stream to avoid cross-stream conflicts
                             # with arrays extracted from BatchGenerator caches.
                             with mx.stream(generation_stream):
+                                # ⭐ FIX: 强制只存储 prompt tokens，确保和 match_cache 一致
+                                # 这样 match_cache 和 store_cache 使用相同的 token sequence
+                                # 避免 boundary override 导致的 hash 不匹配问题
+                                token_sequence_to_store = list(request.prompt_token_ids)
+                                intermediate_snapshots = None
+
+                                # 仍然尝试获取 boundary override（用于 ArraysCache 优化）
                                 boundary_override = self._get_boundary_store_override(
                                     request_id,
-                                    cacheable_sequence,
+                                    token_sequence_to_store,  # 使用 prompt tokens
                                 )
-                                intermediate_snapshots = None
+
                                 if boundary_override is not None:
                                     (
-                                        token_sequence_to_store,
+                                        _,  # 忽略 token_sequence（我们强制使用 prompt）
                                         boundary_cache,
                                         boundary_model_config,
                                         intermediate_snapshots,
@@ -3206,12 +3336,14 @@ class Scheduler:
                                     if boundary_model_config is not None:
                                         model_cache_config = boundary_model_config
                                     logger.info(
-                                        f"Using boundary cache snapshot for {request_id}: "
-                                        f"storing {len(token_sequence_to_store)}/"
-                                        f"{len(full_token_sequence)} tokens "
-                                        f"(skipping trailing partial block, "
-                                        f"{len(intermediate_snapshots) if intermediate_snapshots else 0} "
+                                        f"Using prompt-only cache (consistency fix): "
+                                        f"storing {len(token_sequence_to_store)} prompt tokens "
+                                        f"({len(intermediate_snapshots) if intermediate_snapshots else 0} "
                                         f"intermediate snapshots)"
+                                    )
+                                else:
+                                    logger.info(
+                                        f"Storing prompt-only cache: {len(token_sequence_to_store)} tokens"
                                     )
 
                                 # Build extra_keys for VLM image hash
@@ -3260,6 +3392,43 @@ class Scheduler:
 
                     # ALWAYS clear request entry to prevent memory leak
                     self.block_aware_cache.clear_request_entry(request_id)
+
+            # ACO: Log inference metrics before removing request
+            if self.aco is not None and request is not None and hasattr(request, '_aco_start_time'):
+                try:
+                    import time
+                    total_time_ms = (time.perf_counter() - request._aco_start_time) * 1000
+
+                    # Calculate padding tokens if prompt padding was used
+                    padding_tokens = 0
+                    if self.config.enable_prompt_padding:
+                        system_prompt_length = len(request.prompt_token_ids)
+                        block_size = self.config.paged_cache_block_size
+                        remainder = system_prompt_length % block_size
+                        if remainder > 0 and (block_size - remainder) <= self.config.max_padding_tokens:
+                            padding_tokens = block_size - remainder
+
+                    # Get agent_id from request (default to "unknown")
+                    agent_id = getattr(request, 'agent_id', 'unknown')
+
+                    # Estimate prefill vs decode time (simplified)
+                    # TODO: More accurate timing if scheduler tracks prefill/decode separately
+                    prefill_time_ms = total_time_ms * 0.3  # Rough estimate
+                    decode_time_ms = total_time_ms * 0.7
+
+                    self.aco.log_inference(
+                        agent_id=agent_id,
+                        system_prompt_length=len(request.prompt_token_ids),
+                        user_query_length=0,  # TODO: Separate system/user prompt if available
+                        cache_hit_ratio=getattr(request, '_aco_cache_hit_ratio', 0.0),
+                        skip_logic_type=getattr(request, '_aco_skip_logic_type', 'NONE'),
+                        block_size=self.config.paged_cache_block_size,
+                        padding_tokens=padding_tokens,
+                        prefill_time_ms=prefill_time_ms,
+                        decode_time_ms=decode_time_ms,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to log ACO metrics for request {request_id}: {e}")
 
             # Remove from running
             if request_id in self.running:
@@ -3623,6 +3792,15 @@ class Scheduler:
         paged SSD cache files are NOT cleared to allow reuse on reload.
         """
         logger.info("Scheduler shutdown initiated...")
+
+        # Stop adaptive optimization loop
+        if self._adaptive_thread is not None and self._adaptive_thread.is_alive():
+            logger.info("Stopping adaptive optimization loop...")
+            self._stop_adaptive_loop.set()
+            self._adaptive_thread.join(timeout=5.0)
+            if self._adaptive_thread.is_alive():
+                logger.warning("Adaptive optimization loop did not stop in time")
+
         if self.paged_ssd_cache_manager is not None:
             self.paged_ssd_cache_manager.close()
             self.paged_ssd_cache_manager = None

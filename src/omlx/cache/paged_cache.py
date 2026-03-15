@@ -1035,12 +1035,54 @@ class PagedCacheManager(CacheManager):
 
                 if cached_block is None:
                     self.stats.misses += 1
+                    logger.info(f"🔍 Cache MISS at block {i}: hash={block_hash[:16]}..., tokens={block_tokens[:5]}...")
                     break  # Cache miss, stop here
 
                 cached_blocks.append(cached_block)
                 parent_hash = block_hash
                 num_cached_tokens += self.block_size
                 self.stats.hits += 1
+                logger.info(f"✅ Cache HIT at block {i}: hash={block_hash[:16]}..., cached_tokens={num_cached_tokens}")
+
+            # ⭐ ThunderLLAMA-style Partial Block Matching
+            # Try to match remaining tokens that don't form a complete block
+            remaining_tokens = len(token_ids) - num_cached_tokens
+            if remaining_tokens > 0 and remaining_tokens < self.block_size:
+                partial_tokens = token_ids[num_cached_tokens:]
+
+                # Compute partial block hash
+                partial_hash = compute_block_hash(
+                    parent_hash, partial_tokens,
+                    extra_keys=extra_keys, model_name=self.model_name,
+                )
+
+                # Look up partial block in cache
+                partial_block = self.cached_block_hash_to_block.get_block(partial_hash)
+
+                # Also check SSD
+                if partial_block is None and self._paged_ssd_cache_manager is not None:
+                    if self._paged_ssd_cache_manager.has_block(partial_hash):
+                        block = self.allocate_block()
+                        if block is not None:
+                            block.block_hash = partial_hash
+                            block.token_count = remaining_tokens
+                            block.ref_count = 0
+                            self.cached_block_hash_to_block.insert(partial_hash, block)
+                            partial_block = block
+
+                if partial_block is not None:
+                    cached_blocks.append(partial_block)
+                    num_cached_tokens += remaining_tokens
+                    self.stats.hits += 1
+                    logger.info(
+                        f"✅ Partial block HIT: {remaining_tokens} tokens, "
+                        f"hash={partial_hash[:16]}..., total_cached={num_cached_tokens}"
+                    )
+                else:
+                    logger.info(
+                        f"🔍 Partial block MISS: {remaining_tokens} tokens, "
+                        f"hash={partial_hash[:16]}..."
+                    )
 
             return cached_blocks, num_cached_tokens
 
