@@ -148,6 +148,14 @@ class RequestOutputCollector:
             completion_tokens=new.completion_tokens,
             tool_calls=new.tool_calls,  # Preserve tool_calls for Harmony models
             cached_tokens=new.cached_tokens,
+            # ContextPilot message alignment metadata (propagate from latest)
+            message_aligned=new.message_aligned,
+            aligned_message_count=new.aligned_message_count,
+            total_message_count=new.total_message_count,
+            system_prompt_hash=new.system_prompt_hash or existing.system_prompt_hash,
+            # Timing (propagate from latest for accurate generation_duration)
+            time_to_first_token=new.time_to_first_token or existing.time_to_first_token,
+            generation_duration=new.generation_duration,
             error=new.error or existing.error,
         )
 

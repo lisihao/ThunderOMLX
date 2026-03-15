@@ -1,378 +1,367 @@
 # ThunderOMLX
 
-**Mac mini 最强本地推理引擎 — 融合 omlx、ThunderLLAMA、ClawGate 的优势**
+**Apple Silicon 上的高性能本地推理引擎 — 基于 MLX，融合 ThunderLLAMA 级缓存优化与 ContextPilot 智能上下文**
 
-> 为 openClaw 打造的 Apple Silicon 原生推理引擎，配备 Web 管理面板和 macOS 菜单栏应用
-
----
-
-## 🎯 项目目标
-
-以 [omlx](https://github.com/jundot/omlx) 为底座，融合以下项目的核心优势：
-
-| 项目 | 采用特性 |
-|------|----------|
-| **omlx** | Web UI + macOS 菜单栏应用 + 配置管理 |
-| **ThunderLLAMA** | llama.cpp + Paged Attention + LMCache |
-| **ClawGate** | 端云协同路由 + 智能回退 |
-| **ContextPilot** | 上下文压缩 + Token 优化 |
-
-**核心差异化**：
-- ✅ Apple Silicon 原生优化（Metal GPU 加速）
-- ✅ 端云协同（本地优先，云端回退）
-- ✅ 两层缓存（内存 + SSD，跨会话复用）
-- ✅ 用户友好（一键安装，菜单栏控制）
+> OpenAI 兼容 API / Web 管理面板 / macOS 菜单栏应用 / 全部开箱即用
 
 ---
 
-## 🏗️ 系统架构
+## 核心能力一览
+
+| 能力 | 说明 | 实测数据 |
+|------|------|----------|
+| **Paged SSD Cache** | 块级 KV Cache 持久化，跨会话复用 | 185x SSD 加速 |
+| **Full Skip Logic** | 100% 缓存命中时完全跳过 prefill | 55-78x 重复推理加速 |
+| **Hybrid Hashing** | xxHash64 双重哈希，极速前缀匹配 | 50x vs SHA256 |
+| **LRU-2 内存缓存** | COLD/HOT 双队列，热点数据零延迟 | 0.004ms 命中 |
+| **lz4 压缩** | SSD 读写压缩，平衡速度与空间 | 28.6x I/O 加速 |
+| **ContextPilot** | 消息级缓存感知 + 系统提示指纹 | < 1ms/request 开销 |
+| **Batch Reconstruction** | 预分配 buffer + 一次性 MLX sync | 33x 张量拼接加速 |
+
+---
+
+## 系统架构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     ThunderOMLX Architecture                 │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │  macOS Menubar App (PyObjC)                         │   │
-│  │  - Start/Stop Server                                │   │
-│  │  - Model Management                                 │   │
-│  │  - System Monitoring                                │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                          ▲                                  │
-│                          │ HTTP                             │
-│                          ▼                                  │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │  Web UI (FastAPI + HTML/CSS/JS)                     │   │
-│  │  - Dashboard                                        │   │
-│  │  - Configuration                                    │   │
-│  │  - Performance Metrics                              │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                          ▲                                  │
-│                          │ REST API                         │
-│                          ▼                                  │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │  ClawGate Router (端云协同)                         │   │
-│  │  ┌─────────────┐         ┌─────────────┐            │   │
-│  │  │ Local Path  │         │ Cloud Path  │            │   │
-│  │  │ (Priority)  │         │ (Fallback)  │            │   │
-│  │  └──────┬──────┘         └──────┬──────┘            │   │
-│  │         │                       │                    │   │
-│  │         ▼                       ▼                    │   │
-│  │  ThunderLLAMA          OpenAI/Anthropic             │   │
-│  │  (llama-server)        (Cloud API)                  │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                          ▲                                  │
-│                          │                                  │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │  Performance Optimization Layer                     │   │
-│  │  - LMCache (L2: 内存 8GB, L3: SSD 256GB)            │   │
-│  │  - ContextPilot (上下文压缩)                        │   │
-│  │  - Paged Attention (KV Cache 优化)                 │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+                         ┌───────────────────────────────┐
+                         │  OpenAI-Compatible REST API   │
+                         │  POST /v1/chat/completions    │
+                         └──────────────┬────────────────┘
+                                        │
+                         ┌──────────────▼────────────────┐
+                         │        FastAPI Server          │
+                         │   (streaming + non-streaming)  │
+                         └──────────────┬────────────────┘
+                                        │
+              ┌─────────────────────────▼─────────────────────────┐
+              │                   Scheduler                        │
+              │                                                    │
+              │  ┌──────────────┐    ┌─────────────────────────┐  │
+              │  │ ContextPilot │───>│   Prefix Cache Matcher   │  │
+              │  │   Adapter    │    │  (Skip Logic Decision)   │  │
+              │  └──────────────┘    └─────────────────────────┘  │
+              │         │                        │                 │
+              │   message boundaries       FULL SKIP / APPROX     │
+              │   system_prompt_hash       / NO SKIP               │
+              │                                  │                 │
+              │  ┌───────────────────────────────▼──────────────┐  │
+              │  │            Paged Cache Manager                │  │
+              │  │                                               │  │
+              │  │   L1 RAM           L2 SSD (lz4)              │  │
+              │  │  ┌──────────┐    ┌───────────────────┐       │  │
+              │  │  │ LRU-2    │    │ PagedSSDCache     │       │  │
+              │  │  │ COLD/HOT │◄──►│ block_size=256    │       │  │
+              │  │  │ 0.004ms  │    │ xxHash64 checksum │       │  │
+              │  │  └──────────┘    └───────────────────┘       │  │
+              │  └──────────────────────────────────────────────┘  │
+              └────────────────────────┬──────────────────────────┘
+                                       │
+              ┌────────────────────────▼──────────────────────────┐
+              │              MLX Batched Engine                    │
+              │   Metal GPU / Unified Memory / Apple Silicon      │
+              └───────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🚀 核心特性
+## 已交付特性（6 大阶段）
 
-### 1. Web 管理面板 + macOS 菜单栏应用
+### Phase 1: P0 核心特性移植 — ThunderLLAMA 精华
 
-- 📊 **实时监控**：Token 生成速度、缓存命中率、路由状态
-- ⚙️ **配置管理**：模型选择、端云切换、性能参数
-- 🎮 **一键控制**：菜单栏启动/停止服务
+从 ThunderLLAMA (llama.cpp) 项目中提炼的 4 项核心缓存优化，移植到 MLX 推理引擎。
 
-### 2. 高性能 SSD 缓存（P1 完成）✅
+**P0-1: Full Skip Logic**
+- 100% 缓存命中时完全跳过 prefill 计算
+- 实现位置: `prefix_cache.py` → `match_cache_with_skip_logic()`
+- 效果: 重复推理 55-78x 加速
 
-- ⚡ **Smart Prefetch**：185x SSD 加速，4 线程并行预取
-- 🔒 **Checksum Validation**：XXH64 数据完整性保护（-3.3% 开销）
-- 💾 **Adaptive Chunk**：4x-16x 内存优化，动态分块加载
-- 🗂️ **两层缓存**：Hot Cache（内存）+ SSD Cache（持久化）
+**P0-2: Approximate Skip**
+- 95%+ 缓存命中时零填充未命中部分，仍跳过 prefill
+- 对生成质量影响可忽略，显著减少计算量
 
-### 2.5 Prompt Padding + Skip Logic（2026-03-14 完成）✅
+**P0-3: Hybrid Hashing (xxHash64)**
+- 替换 SHA256 为 xxHash64 双重哈希
+- 速度: 1.24 us/hash vs 61.76 us/hash (50x)
+- 向后兼容: xxhash 未安装时自动 fallback
 
-- 🎯 **智能对齐**：自动填充 prompt 到 block 边界（100% cache hit）
-- ✨ **FULL SKIP**：跳过 100% prefill 计算，55-78x 性能提升
-- 📊 **零开销**：最多填充 64 tokens，对生成质量无影响
-- 🚀 **Agent 优化**：高重复场景性能显著提升
+**P0-4: SSD Compression**
+- KV Cache 块级压缩持久化
+- 支持 lz4 (默认) / zlib
+- 压缩比: 2-4x (取决于精度)
 
-### 2.6 OpenClaw 多 Agent 优化（2026-03-14 完成）✅
+### Phase 2: 块级缓存优化
 
-- 📊 **真实数据分析**：基于 ~/.openclaw 实际使用数据优化配置
-- 🎯 **Per-Agent 配置**：每个 Agent 使用最优 block_size（64-256）
-- 💰 **Padding 优化**：平均 padding 开销减少 65%（29%→4.9%）
-- ✅ **验证**：4 个活跃 Agent 全部达到 100% cache hit + FULL SKIP
-- 📁 **配置文件**：`openclaw_agent_cache_config.py` 开箱即用
+**LRU-2 Block-Level Cache**
+- COLD/HOT 双队列：首次访问进 COLD，第二次晋升 HOT
+- O(1) 操作复杂度 (add, touch, evict)
+- 线程安全 (RLock)
+- Agent 场景: system prompt 自动保留在 HOT 队列
 
-### 2.7 Tokenizer 性能优化（2026-03-14 完成）✅
+**Smart Prefetch**
+- 4 线程并行 SSD 预取
+- 访问频率驱动的预取策略
+- 实测 185x SSD 加速
 
-- 🔥 **9.1x 加速**：总时间从 308ms → 34ms（-89%）
-- 💾 **内存缓存**：tokenizer.get_vocab() 167x 加速（95ms → 0.57ms）
-- 💿 **磁盘缓存**：启动时从 ~/.cache 加载 vocab（45ms → 34ms）
-- ✅ **完整性校验**：Size + Hash 双重校验，自动降级修复
-- 📊 **新瓶颈**：_process_prompts (33%)、MLX generate (30%)
+**Checksum Validation**
+- XXH64 校验 (~10 GB/s)
+- 自动损坏检测和淘汰
+- 缓存命中时仅 -3.3% 开销
 
-**性能对比**:
+### Phase 3: ThunderLLAMA 优化能力移植
+
+**统一配置系统**
+- Pydantic Schema 驱动
+- thunderomlx.yaml 单一配置入口
+- 运行时热加载
+
+**MLX 张量序列化**
+- .npy/.npz + .meta.json 格式
+- lz4 压缩 (默认) / zlib
+- XXH64 完整性校验
+- 性能: 保存 8ms, 加载 0.55ms (4MB)
+
+**统一内存双层缓存**
+- L2 (Unified RAM): < 0.01ms 访问
+- L3 (NVMe SSD): 13.68ms 访问 (lz4 优化后)
+- LRU-2 跨层驱逐
+- 跨会话恢复
+
+### Phase 4: 性能验证与优化 (lz4 + Batch Reconstruction)
+
+**lz4 压缩替换 zstd**
+- 序列化: 546ms → 109ms (5.0x)
+- L3 加载: 392ms → 14ms (28.6x)
+- 吞吐量: 29 MB/s → 147 MB/s (5.0x)
+
+**Batch Reconstruction**
+- 预分配 KV buffer + 逐 block 填充 + 一次性 MLX sync
+- 张量拼接: 20ms → 0.6ms (33x)
+- 40 layers 合计: 800ms → 24ms
+
+**Tokenizer 性能优化**
+- 9.1x 加速 (308ms → 34ms)
+- 内存 + 磁盘双级 vocab 缓存
+- Size + Hash 双重校验
+
+### Phase 5: Skip Logic 端到端优化
+
+**Prompt Padding + Skip Logic**
+- 自动填充 prompt 到 block 边界
+- 100% cache hit → FULL SKIP 触发
+- Agent 高重复场景性能显著提升
+
+**OpenClaw 多 Agent 优化**
+- 基于真实 ~/.openclaw 数据优化
+- Per-Agent 最优 block_size (64-256)
+- Padding 开销: 29% → 4.9% (-65%)
+
+**_process_prompts 优化**
+- FULL SKIP 模式下跳过 boundary snapshots
+- 5.3% 延迟降低
+
+### Phase 6: ContextPilot — 消息级缓存智能 `v0.9.0-contextpilot`
+
+完整的 6 阶段实现 (+843 行, 12 文件):
+
+**Context Indexing**
+- ContextBlock: SHA256[:16] 内容哈希去重
+- ContextIndex: 全局去重索引，O(1) 查找
+- 多模态消息解析支持
+
+**Message-aware Caching**
+- 增量 `apply_chat_template()` 精确消息边界
+- 覆盖 `<|im_start|>` 等 chat template 特殊 token
+- 单调性校验 + 末尾对齐修正
+
+**Cache Reporting (API 扩展)**
+- `message_aligned`: 缓存是否对齐到完整消息边界
+- `aligned_message_count`: 被缓存覆盖的完整消息数
+- `total_message_count`: 请求总消息数
+
+**Short Prompt Caching**
+- Partial block 缓存路径修复
+- prompt < block_size 也能正常缓存和命中
+
+**System Prompt Fingerprint**
+- SHA256[:16] 系统提示指纹
+- 完整数据流: adapter → scheduler → engine → API
+- 相同 system prompt 的请求自动归组
+
+**Boundary Migration**
+- 边界计算从 scheduler 迁移到 ContextPilotAdapter
+- 职责分离清晰化
+
+**API 响应 (`usage.context_pilot`):**
+```json
+{
+  "usage": {
+    "prompt_tokens": 1024,
+    "completion_tokens": 128,
+    "cached_tokens": 768,
+    "context_pilot": {
+      "message_aligned": true,
+      "aligned_message_count": 3,
+      "total_message_count": 5,
+      "system_prompt_hash": "75357d685f238b6a"
+    }
+  }
+}
 ```
-┌────────────────┬──────────┬──────────┬──────────┐
-│    指标        │  优化前  │  优化后  │  提升    │
-├────────────────┼──────────┼──────────┼──────────┤
-│ 总时间 (5次)   │ 1.541 s  │ 0.170 s  │ -89%     │
-│ 平均时间/次    │ 308 ms   │ 34 ms    │ 9.1x     │
-│ Tokenizer 耗时 │ 907 ms   │ ~0 ms    │ 消除     │
-└────────────────┴──────────┴──────────┴──────────┘
-```
-
-详见: [`docs/TOKENIZER_OPTIMIZATION.md`](docs/TOKENIZER_OPTIMIZATION.md)
-
-### 2.8 _process_prompts 性能优化（2026-03-14 完成）✅
-
-- ⚡ **5.3% 加速**：总时间从 34ms → 32.2ms（-1.8ms/次）
-- 🎯 **条件化跳过**：FULL SKIP 模式下跳过 boundary snapshots
-- 🔧 **专家会审**：审判官 + 稳健派联合分析，建设者实现
-- 📊 **新瓶颈**：_process_prompts (35%)、MLX generate (32%)
-
-**性能对比**:
-```
-┌────────────────────┬──────────┬──────────┬──────────┐
-│      指标          │  优化前  │  优化后  │  提升    │
-├────────────────────┼──────────┼──────────┼──────────┤
-│ 总时间 (5次)       │ 170 ms   │ 161 ms   │ -5.3%    │
-│ 平均时间/次        │ 34 ms    │ 32.2 ms  │ -1.8ms   │
-│ _process_prompts   │ 11.4 ms  │ 11.4 ms  │ ~0ms     │
-└────────────────────┴──────────┴──────────┴──────────┘
-```
-
-详见: [`docs/PROCESS_PROMPTS_OPTIMIZATION.md`](docs/PROCESS_PROMPTS_OPTIMIZATION.md)
-
-### 3. ThunderLLAMA 推理引擎（待集成）
-
-- 🔥 **Apple Silicon 优化**：Metal GPU 加速 + Unified Memory
-- 📦 **Paged Attention**：无碎片化，稳定长时间运行
-- 💾 **LMCache**：跨会话复用
-
-### 4. ClawGate 端云协同（待集成）
-
-- 🌐 **智能路由**：简单问题本地，复杂问题云端
-- 💰 **成本优化**：本地优先，减少云端 API 费用
-- 🔄 **自动回退**：本地失败时自动切换到云端
-
-### 5. ContextPilot 上下文优化（待集成）
-
-- 📉 **Token 压缩**：长对话自动压缩，节省成本
-- 🎯 **关键信息保留**：智能保留重要上下文
-- 📊 **可视化**："Token 减负账单"显示节省金额
 
 ---
 
-## 📦 安装
+## 性能总览
 
-### 方式 1：DMG 安装包（推荐）
+### 缓存子系统
 
-1. 下载 `ThunderOMLX-1.0.0.dmg`
-2. 双击打开 DMG
-3. 拖动 `ThunderOMLX.app` 到 Applications 文件夹
-4. 启动应用（菜单栏出现图标）
+| 组件 | 基准 | 优化后 | 提升 |
+|------|------|--------|------|
+| SSD 块读取 | 144 ms/块 | 0.78 ms/块 (Smart Prefetch) | **185x** |
+| L3 加载 (16MB) | 392 ms | 14 ms (lz4) | **28.6x** |
+| 张量拼接 (40 layers) | 800 ms | 24 ms (Batch Reconstruction) | **33x** |
+| Hash 计算 | 61.76 us (SHA256) | 1.24 us (xxHash64) | **50x** |
+| L2 内存命中 | N/A | 0.004 ms | **极速** |
+| 序列化吞吐 | 29 MB/s | 147 MB/s (lz4) | **5.0x** |
 
-### 方式 2：从源码构建
+### 推理性能 (Qwen3.5-35B-MLX, M4 Pro 48GB)
+
+| 场景 | 指标 |
+|------|------|
+| 首次请求 (冷启动) | ~5 tok/s (含模型加载) |
+| 热推理 | 40-46 tok/s |
+| Prefill TPS | ~2900 tok/s |
+| Decode TPS | ~240 tok/s |
+| ContextPilot 开销 | < 1 ms/request |
+
+### Skip Logic
+
+| Cache Hit | 策略 | 效果 |
+|-----------|------|------|
+| 100% | FULL SKIP | 跳过全部 prefill，55-78x 加速 |
+| 95%+ | APPROXIMATE SKIP | 零填充未命中部分，近似 FULL SKIP |
+| < 95% | NO SKIP | 正常 prefill，仍享受缓存加速 |
+
+---
+
+## 快速开始
+
+### 从源码运行
 
 ```bash
-# 1. Clone 仓库
-git clone https://github.com/your-org/ThunderOMLX.git
+git clone https://github.com/lisihao/ThunderOMLX.git
 cd ThunderOMLX
 
-# 2. 安装依赖
-cd packaging
-pip install venvstacks
+# 创建虚拟环境
+python3 -m venv venv
+source venv/bin/activate
 
-# 3. 构建应用
-python build.py
+# 安装依赖
+pip install -e ".[dev]"
 
-# 4. 输出
-# - build/ThunderOMLX.app
-# - dist/ThunderOMLX-<version>.dmg
+# 启动服务 (指定模型路径)
+python -m omlx serve --model /path/to/your-mlx-model --port 8000
 ```
 
----
-
-## 🎮 快速开始
-
-### 1. 启动服务
-
-点击菜单栏 ThunderOMLX 图标 → **Start Server**
-
-### 2. 打开 Web 管理面板
-
-浏览器访问：`http://localhost:8080`
-
-### 3. 配置模型
-
-Settings → 选择本地模型路径或云端 API Key
-
-### 4. 发送请求
+### 发送请求
 
 ```bash
-curl -X POST http://localhost:8080/v1/completions \
+curl -s http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "Hello, ThunderOMLX!",
-    "max_tokens": 50
-  }'
+    "model": "your-model-name",
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": "Hello!"}
+    ],
+    "max_tokens": 128
+  }' | python3 -m json.tool
+```
+
+### 查看 ContextPilot 元数据
+
+响应中的 `usage.context_pilot` 字段报告消息级缓存状态:
+
+```bash
+# 第二次发送相同 system prompt 的请求，观察 cached_tokens 和 context_pilot
+curl -s http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "your-model-name",
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": "Different question here"}
+    ]
+  }' | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d['usage'], indent=2))"
 ```
 
 ---
 
-## 📊 性能对比
-
-### P1 缓存优化实测数据（2026-03-13）
-
-| 功能 | 基准 | P1 优化后 | 提升 |
-|------|------|----------|------|
-| **Smart Prefetch** | 144 ms/块（冷读 SSD）| 0.78 ms/块（预取命中）| **185x** ✅ |
-| **Adaptive Chunk** | 32 MB（8K tokens）| 2 MB（分块加载）| **16x** ✅ |
-| **Checksum 验证** | - | -3.3% 开销（缓存后）| **比无校验还快** ✅ |
-| **缓存块对齐率** | ~70% | 100% | **+30%** ✅ |
-
-### 与 omlx (mlx-lm) 对比
-
-| 指标 | omlx (mlx-lm) | ThunderOMLX (P1) | 提升 |
-|------|---------------|------------------|------|
-| **Prefill 速度** | 2907 t/s | 2830 t/s | -2.6% |
-| **Decode 速度** | 239 t/s | 247 t/s | +3.3% |
-| **SSD 缓存加速** | - | **185x** | ✅ |
-| **长 prompt 内存** | - | **-94%** (16x) | ✅ |
-| **数据完整性** | 无保障 | 100% 校验 | ✅ |
-| **显存占用** | 26GB | 13GB（目标）| -50%（待实现）|
-
-### Prompt Padding + Skip Logic 优化（2026-03-14）✅
-
-| 功能 | 优化前 | 优化后 | 提升 |
-|------|--------|--------|------|
-| **Cache Hit Ratio** | 82.8% (未对齐) | **100%** (padding 对齐) | **+17.2%** ✅ |
-| **Skip Logic 触发** | ❌ 不触发 | ✅ **FULL SKIP** | **跳过 100% prefill** ✅ |
-| **重复推理性能** | 900 ms | **1350 ms** (含生成) | **55-78x** 加速 ✅ |
-
-**核心机制**:
-- ⚡ **Prompt Padding**: 自动填充 prompt 到 block 边界（116 → 128 tokens）
-- ✨ **FULL SKIP**: 100% cache hit 触发完全跳过 prefill 计算
-- 🎯 **智能对齐**: 最多填充 64 tokens，确保性能最优
-
-**使用方法**:
-```python
-scheduler_config = SchedulerConfig(
-    paged_cache_block_size=32,
-    enable_prompt_padding=True,  # 启用 Prompt Padding
-    max_padding_tokens=64,       # 最大填充限制
-)
-```
-
----
-
-## 🛠️ 技术栈
+## 技术栈
 
 | 层级 | 技术 |
 |------|------|
-| **UI** | PyObjC (菜单栏) + Web UI (FastAPI) |
-| **后端** | FastAPI + uvicorn |
-| **推理引擎** | llama.cpp (ThunderLLAMA) |
-| **路由** | ClawGate (端云协同) |
-| **缓存** | LMCache (内存 + SSD) |
-| **上下文优化** | ContextPilot |
+| **推理引擎** | MLX (Apple Silicon 原生, Metal GPU) |
+| **API 框架** | FastAPI + Uvicorn |
+| **缓存** | Paged SSD Cache + LRU-2 内存 + xxHash64 |
+| **压缩** | lz4 (默认) / zlib |
+| **序列化** | .npy/.npz + .meta.json |
+| **上下文优化** | ContextPilot (SHA256 去重 + 消息边界) |
+| **UI** | Web 管理面板 + macOS 菜单栏 (PyObjC) |
 | **打包** | venvstacks + DMG |
 
 ---
 
-## 📁 项目结构
+## 项目结构
 
 ```
 ThunderOMLX/
-├── .solar/              # 状态管理
-│   └── STATE.md
-├── src/                 # 源码（Fork 自 omlx）
-│   ├── omlx/            # FastAPI 后端
-│   ├── omlx_app/        # macOS 菜单栏应用
-│   └── packaging/       # 打包配置
-├── docs/                # 文档
-│   ├── ARCHITECTURE.md
-│   ├── API.md
-│   └── DEPLOYMENT.md
-├── scripts/             # 脚本
-│   ├── build.sh
-│   └── test.sh
-├── tests/               # 测试
+├── src/omlx/
+│   ├── server.py              # FastAPI 入口, OpenAI 兼容 API
+│   ├── scheduler.py           # 请求调度 + 缓存集成
+│   ├── engine/
+│   │   ├── batched.py         # MLX 批量推理引擎
+│   │   └── base.py            # 引擎基类
+│   ├── cache/
+│   │   ├── prefix_cache.py    # 前缀缓存 + Skip Logic
+│   │   ├── paged_cache.py     # 块级 KV Cache 管理
+│   │   ├── paged_ssd_cache.py # SSD 持久化 (lz4 压缩)
+│   │   └── ...
+│   ├── contextpilot/
+│   │   ├── adapter.py         # ContextPilot 核心 (577 行)
+│   │   └── __init__.py
+│   ├── request.py             # 请求/响应数据模型
+│   └── output_collector.py    # 流式输出聚合
+├── .solar/
+│   └── STATE.md               # 项目状态追踪
 └── README.md
 ```
 
 ---
 
-## 🗓️ Roadmap
+## Roadmap
 
-| 阶段 | 时间 | 状态 |
-|------|------|------|
-| Phase 0: 项目搭建 | 1 天 | ✅ 完成 |
-| **Phase 1: 缓存优化 (P1)** | 3 天 | ✅ 完成 |
-| **Phase 2: 缓存优化 (P2)** | 1 天 | ✅ 完成 |
-| Phase 3: 推理引擎替换 | 2-3 天 | ⏸️ 待开始 |
-| Phase 4: ClawGate 集成 | 3-4 天 | ⏸️ 待开始 |
-| Phase 5: 性能优化 | 2-3 天 | ⏸️ 待开始 |
-| Phase 6: 打包分发 | 2-3 天 | ⏸️ 待开始 |
-| Phase 7: 文档和发布 | 1-2 天 | ⏸️ 待开始 |
-
-### ✅ Phase 1 完成成果（2026-03-13）
-
-**P1-5: Smart Prefetch** - 智能预取
-- ✅ 185x SSD 加速（远超目标 2-4x）
-- ✅ 4 线程并行预取
-- ✅ 访问频率追踪
-
-**P1-6: Checksum Validation** - 数据完整性
-- ✅ XXH64 快速校验（~10 GB/s）
-- ✅ 缓存优化：-3.3% 开销（比无校验还快）
-- ✅ 自动损坏检测和删除
-
-**P1-7: Adaptive Chunk Prefill** - 自适应分块
-- ✅ 4x-16x 内存优化
-- ✅ 缓存块对齐（100% 对齐率）
-- ✅ 动态 chunk size 计算
-
-**详细报告**: [P1_FINAL_SUMMARY.md](./P1_FINAL_SUMMARY.md)
-
-### ✅ Phase 2 完成成果（2026-03-13）
-
-**P2-9: LRU-2 Block-Level Cache Optimization** - 块级缓存优化
-- ✅ O(1) 操作复杂度（add, touch, evict per item）
-- ✅ COLD/HOT 两层队列分离（区分一次性访问 vs 重复访问）
-- ✅ 第 2 次访问触发 COLD→HOT 晋升
-- ✅ COLD 队列优先驱逐（保护热点数据）
-- ✅ 线程安全（RLock 并发控制）
-- ✅ 8/8 测试全部通过
-- ✅ Agent 场景验证（system prompt 保留在 HOT 队列）
-
-**详细设计**: [P2-9_DESIGN_V2.md](./.solar/P2-9_DESIGN_V2.md)
+| 阶段 | 状态 | 核心交付 |
+|------|------|----------|
+| Phase 0: 项目搭建 | ✅ 完成 | Fork omlx, Git, DMG 打包验证 |
+| Phase 1: P0 特性移植 | ✅ 完成 | Full Skip, Approximate Skip, Hybrid Hash, SSD Compression |
+| Phase 2: 块级缓存 | ✅ 完成 | LRU-2 COLD/HOT, Smart Prefetch 185x, Checksum |
+| Phase 3: 优化能力移植 | ✅ 完成 | 统一配置, 张量序列化, 双层缓存, GIL 研究 |
+| Phase 4: 性能验证 | ✅ 完成 | lz4 28.6x, Batch Reconstruction 33x, Tokenizer 9.1x |
+| Phase 5: Skip Logic 优化 | ✅ 完成 | Prompt Padding, OpenClaw Agent 优化, _process_prompts |
+| ContextPilot | ✅ 完成 | 6 阶段消息级缓存智能, tag: v0.9.0-contextpilot |
+| ClawGate 端云协同 | 待启动 | 本地优先 + 云端回退路由 |
+| DMG 打包分发 | 待启动 | venvstacks + 代码签名 |
 
 ---
 
-## 🤝 贡献
+## License
 
-欢迎贡献！请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)
+Apache 2.0 (继承自 omlx)
 
----
+## 致谢
 
-## 📄 License
-
-Apache 2.0 License（继承自 omlx）
-
----
-
-## 🙏 致谢
-
-本项目基于以下优秀开源项目：
-- [omlx](https://github.com/jundot/omlx) - UI 和框架基础
-- [llama.cpp](https://github.com/ggerganov/llama.cpp) - 推理引擎核心
-- [ThunderLLAMA](https://github.com/your-org/ThunderLLAMA) - Paged Attention + LMCache
-- [ClawGate](https://github.com/your-org/ClawGate) - 端云协同路由
-
----
-
-**Made with ⚡ for Apple Silicon by openClaw Team**
+- [omlx](https://github.com/jundot/omlx) — UI 和框架基础
+- [MLX](https://github.com/ml-explore/mlx) — Apple Silicon 推理框架
+- [ThunderLLAMA](https://github.com/lisihao/ThunderLLAMA) — 缓存优化灵感来源
+- [xxHash](https://github.com/Cyan4973/xxHash) — 极速哈希
+- [lz4](https://github.com/lz4/lz4) — 极速压缩

@@ -1743,6 +1743,10 @@ async def create_chat_completion(
     # Determine finish reason
     finish_reason = "tool_calls" if tool_calls else output.finish_reason
 
+    # Compute timing metrics from scheduler-tracked data
+    ttft = getattr(output, "time_to_first_token", 0.0)
+    gen_dur = getattr(output, "generation_duration", 0.0)
+
     return ChatCompletionResponse(
         model=request.model,
         choices=[ChatCompletionChoice(
@@ -1757,6 +1761,20 @@ async def create_chat_completion(
             prompt_tokens=output.prompt_tokens,
             completion_tokens=output.completion_tokens,
             total_tokens=output.prompt_tokens + output.completion_tokens,
+            cached_tokens=output.cached_tokens or None,
+            context_pilot={
+                "message_aligned": getattr(output, "message_aligned", False),
+                "aligned_message_count": getattr(output, "aligned_message_count", 0),
+                "total_message_count": getattr(output, "total_message_count", 0),
+                "system_prompt_hash": getattr(output, "system_prompt_hash", None),
+            } if getattr(output, "total_message_count", 0) > 0 else None,
+            model_load_duration=round(model_load_duration, 2) if model_load_duration > 1.0 else None,
+            time_to_first_token=round(ttft, 2) if ttft > 0 else None,
+            total_time=round(elapsed, 2),
+            prompt_eval_duration=round(ttft, 2) if ttft > 0 else None,
+            generation_duration=round(gen_dur, 2) if gen_dur > 0 else None,
+            prompt_tokens_per_second=round(output.prompt_tokens / ttft, 2) if ttft > 0 else None,
+            generation_tokens_per_second=round(output.completion_tokens / gen_dur, 2) if gen_dur > 0 else None,
         ),
     )
 
@@ -1882,6 +1900,12 @@ async def stream_completion(
                     completion_tokens=ct,
                     total_tokens=pt + ct,
                     cached_tokens=last_output.cached_tokens or None,
+                    context_pilot={
+                        "message_aligned": getattr(last_output, "message_aligned", False),
+                        "aligned_message_count": getattr(last_output, "aligned_message_count", 0),
+                        "total_message_count": getattr(last_output, "total_message_count", 0),
+                        "system_prompt_hash": getattr(last_output, "system_prompt_hash", None),
+                    } if getattr(last_output, "total_message_count", 0) > 0 else None,
                     model_load_duration=round(model_load_duration, 2) if model_load_duration > 1.0 else None,
                     time_to_first_token=round(ttft, 2),
                     total_time=round(total_time, 2),
@@ -2145,6 +2169,12 @@ async def stream_chat_completion(
                     completion_tokens=ct,
                     total_tokens=pt + ct,
                     cached_tokens=last_output.cached_tokens or None,
+                    context_pilot={
+                        "message_aligned": getattr(last_output, "message_aligned", False),
+                        "aligned_message_count": getattr(last_output, "aligned_message_count", 0),
+                        "total_message_count": getattr(last_output, "total_message_count", 0),
+                        "system_prompt_hash": getattr(last_output, "system_prompt_hash", None),
+                    } if getattr(last_output, "total_message_count", 0) > 0 else None,
                     model_load_duration=round(model_load_duration, 2) if model_load_duration > 1.0 else None,
                     time_to_first_token=round(ttft, 2),
                     total_time=round(total_time, 2),

@@ -253,6 +253,7 @@ class EngineCore:
         vlm_inputs_embeds: Optional[Any] = None,
         vlm_extra_kwargs: Optional[Dict[str, Any]] = None,
         vlm_image_hash: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """
         Add a request for processing.
@@ -266,6 +267,7 @@ class EngineCore:
             vlm_inputs_embeds: Pre-computed vision+text embeddings for VLM
             vlm_extra_kwargs: Model-specific VLM kwargs (e.g., position_ids)
             vlm_image_hash: SHA256 hash of images for prefix cache
+            messages: Optional chat messages for ContextPilot optimization
 
         Returns:
             The request ID
@@ -285,6 +287,7 @@ class EngineCore:
             vlm_inputs_embeds=vlm_inputs_embeds,
             vlm_extra_kwargs=vlm_extra_kwargs,
             vlm_image_hash=vlm_image_hash,
+            messages=messages,
         )
 
         # Setup output collector with stream_interval from config

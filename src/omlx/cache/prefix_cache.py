@@ -326,6 +326,7 @@ class BlockAwarePrefixCache(CacheManager):
         tokens: List[int],
         extra_keys: Optional[Tuple[Any, ...]] = None,
         approx_threshold: float = 0.95,
+        message_boundaries: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """
         缓存匹配 + Skip Logic 决策 (支持 Full Skip 和 Approximate Skip)
@@ -334,6 +335,7 @@ class BlockAwarePrefixCache(CacheManager):
             tokens: Token sequence to match
             extra_keys: Optional extra keys for cache isolation (e.g., VLM image hash)
             approx_threshold: Threshold for approximate skip (default 0.95 = 95%)
+            message_boundaries: Optional message boundaries for message-level matching (Phase 2)
 
         Returns:
             {
@@ -345,6 +347,29 @@ class BlockAwarePrefixCache(CacheManager):
                 'approx_zero_fill_count': int  # Number of tokens to zero-fill
             }
         """
+        # Phase 2: Message-level matching (if boundaries provided)
+        # Note: This is a simplified implementation that logs message-level info
+        # but still uses block-level caching. Full message-level caching requires
+        # additional infrastructure (message_cache storage).
+        if message_boundaries:
+            logger.debug(
+                f"Message boundaries provided: {len(message_boundaries)} messages, "
+                f"boundaries={message_boundaries[:3]}..."  # Show first 3
+            )
+
+        # Short prompt diagnostic
+        total_tokens = len(tokens)
+        if total_tokens < self.block_size:
+            logger.info(
+                f"📏 Short prompt cache check: {total_tokens} tokens < block_size={self.block_size}, "
+                f"relies on partial block matching"
+            )
+
+        # Release previous _skip_check block table to prevent ref count leak.
+        # Each call to fetch_cache() creates a new block table and increments
+        # ref counts on shared blocks; without cleanup, free blocks leak.
+        self.paged_cache.delete_block_table("_skip_check")
+
         # 使用现有的 fetch_cache 方法
         block_table, remaining = self.fetch_cache("_skip_check", tokens, extra_keys)
 
@@ -391,13 +416,36 @@ class BlockAwarePrefixCache(CacheManager):
             can_skip = False
             approx_zero_fill_count = 0
 
+        # Message alignment analysis: find last fully cached message boundary
+        message_aligned = False
+        aligned_message_count = 0
+        total_message_count = len(message_boundaries) if message_boundaries else 0
+
+        if message_boundaries and block_table and block_table.num_tokens > 0:
+            cached_tokens = block_table.num_tokens
+            for idx, boundary_end in enumerate(message_boundaries):
+                if boundary_end <= cached_tokens:
+                    aligned_message_count = idx + 1
+                    message_aligned = True
+                else:
+                    break
+            if aligned_message_count > 0:
+                logger.info(
+                    f"📐 Message alignment: {aligned_message_count}/{total_message_count} "
+                    f"messages fully cached (boundary={message_boundaries[aligned_message_count - 1]}, "
+                    f"cached={cached_tokens})"
+                )
+
         return {
             'block_table': block_table,
             'remaining_tokens': remaining,
             'can_skip_prefill': can_skip,
             'cache_hit_ratio': cache_hit_ratio,
             'skip_reason': skip_reason,
-            'approx_zero_fill_count': approx_zero_fill_count
+            'approx_zero_fill_count': approx_zero_fill_count,
+            'message_aligned': message_aligned,
+            'aligned_message_count': aligned_message_count,
+            'total_message_count': total_message_count,
         }
 
     def store_cache(
@@ -479,14 +527,17 @@ class BlockAwarePrefixCache(CacheManager):
             # All tokens already cached
             return block_table
 
-        # Allocate only full blocks (skip partial trailing block).
-        # get_computed_blocks() matches full blocks only (floor division),
-        # so partial block data is never used during cache lookup.
-        # Skipping partial blocks also ensures is_last_block points to
-        # the last full block, which is critical for non-sliceable caches
-        # (ArraysCache/RotatingKVCache) that use last-block-only storage.
+        # Allocate full blocks first; partial trailing block is handled
+        # separately below (line ~690) to enable short prompt caching.
         num_new_blocks = len(new_tokens) // self.block_size
         blocks_saved_to_ssd = 0
+
+        # Diagnostic for short prompts (< block_size)
+        if len(new_tokens) < self.block_size:
+            logger.info(
+                f"📏 Short prompt detected: {len(new_tokens)} tokens < block_size={self.block_size}, "
+                f"will store as partial block only (0 full blocks)"
+            )
 
         logger.info(
             f"📊 store_cache: existing_tokens={existing_tokens}, new_tokens={len(new_tokens)}, "

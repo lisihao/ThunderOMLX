@@ -303,6 +303,7 @@ class BatchedEngine(BaseEngine):
         output = await self._engine.generate(
             prompt=prompt,
             sampling_params=sampling_params,
+            messages=kwargs.get("messages"),
         )
 
         text = clean_special_tokens(output.output_text)
@@ -314,6 +315,12 @@ class BatchedEngine(BaseEngine):
             finish_reason=output.finish_reason,
             tool_calls=output.tool_calls,
             cached_tokens=output.cached_tokens,
+            message_aligned=output.message_aligned,
+            aligned_message_count=output.aligned_message_count,
+            total_message_count=output.total_message_count,
+            system_prompt_hash=output.system_prompt_hash,
+            time_to_first_token=output.time_to_first_token,
+            generation_duration=output.generation_duration,
         )
 
     async def stream_generate(
@@ -327,6 +334,7 @@ class BatchedEngine(BaseEngine):
         repetition_penalty: float = 1.0,
         presence_penalty: float = 0.0,
         stop: list[str] | None = None,
+        messages: list[dict[str, Any]] | None = None,
         **kwargs,
     ) -> AsyncIterator[GenerationOutput]:
         """
@@ -342,6 +350,7 @@ class BatchedEngine(BaseEngine):
             repetition_penalty: Repetition penalty (1.0 = disabled)
             presence_penalty: Presence penalty (0.0 = disabled)
             stop: Stop sequences
+            messages: Optional chat messages for ContextPilot optimization
             **kwargs: Additional model-specific parameters
 
         Yields:
@@ -367,6 +376,7 @@ class BatchedEngine(BaseEngine):
         request_id = await self._engine.add_request(
             prompt=prompt,
             sampling_params=sampling_params,
+            messages=messages,
         )
 
         finished_normally = False
@@ -390,6 +400,12 @@ class BatchedEngine(BaseEngine):
                     finish_reason=output.finish_reason,
                     tool_calls=output.tool_calls,
                     cached_tokens=output.cached_tokens,
+                    message_aligned=output.message_aligned,
+                    aligned_message_count=output.aligned_message_count,
+                    total_message_count=output.total_message_count,
+                    system_prompt_hash=output.system_prompt_hash,
+                    time_to_first_token=output.time_to_first_token,
+                    generation_duration=output.generation_duration,
                 )
         except GeneratorExit:
             # Client disconnected
@@ -457,6 +473,7 @@ class BatchedEngine(BaseEngine):
             min_p=min_p,
             repetition_penalty=repetition_penalty,
             presence_penalty=presence_penalty,
+            messages=messages,
             **kwargs,
         )
 
@@ -515,6 +532,7 @@ class BatchedEngine(BaseEngine):
             min_p=min_p,
             repetition_penalty=repetition_penalty,
             presence_penalty=presence_penalty,
+            messages=messages,
             **kwargs,
         ):
             yield output
