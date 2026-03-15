@@ -101,6 +101,9 @@ class Request:
     arrival_time: float = field(default_factory=time.time)
     priority: int = 0  # Lower is higher priority
 
+    # Chat messages (for ContextPilot optimization, Phase 2)
+    messages: Optional[List[Dict[str, Any]]] = None
+
     # Set after tokenization
     prompt_token_ids: Optional[List[int]] = None
     num_prompt_tokens: int = 0

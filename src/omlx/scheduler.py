@@ -39,6 +39,7 @@ from .cache.paged_cache import PagedCacheManager
 from .cache.prefix_cache import BlockAwarePrefixCache
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
 from .exceptions import is_cache_corruption_error
+from .contextpilot import ContextPilotAdapter
 
 # Import tiered cache components
 try:
@@ -1269,6 +1270,22 @@ class Scheduler:
             except Exception as e:
                 logger.error(f"Failed to initialize Adaptive Cache Optimizer: {e}")
                 self.aco = None
+
+        # ContextPilot integration (Phase 2: Message-aware Caching)
+        # Only initialize if paged cache is enabled (requires block-aware cache)
+        if self.block_aware_cache is not None:
+            try:
+                self.context_pilot = ContextPilotAdapter()
+                # Keep last 100 requests for prefix matching
+                self.request_history: deque = deque(maxlen=100)
+                logger.info("ContextPilot adapter initialized for cross-request cache optimization")
+            except Exception as e:
+                logger.error(f"Failed to initialize ContextPilot: {e}")
+                self.context_pilot = None
+                self.request_history = None
+        else:
+            self.context_pilot = None
+            self.request_history = None
 
     def _start_adaptive_optimization_loop(self):
         """Start background thread for adaptive optimization."""
@@ -2626,6 +2643,34 @@ class Scheduler:
             if request.vlm_image_hash:
                 extra_keys = (request.vlm_image_hash,)
 
+            # ContextPilot optimization (Phase 2: Message-aware Caching)
+            message_boundaries = None
+            if self.context_pilot is not None and request.messages:
+                try:
+                    # Optimize request using ContextPilot
+                    optimized = self.context_pilot.optimize_request(
+                        request.messages,
+                        previous_requests=list(self.request_history) if self.request_history else []
+                    )
+
+                    # Extract message boundaries for message-level caching
+                    message_boundaries = self._extract_message_boundaries(
+                        optimized["messages"],
+                        request.prompt_token_ids
+                    )
+
+                    # Save to history
+                    if self.request_history is not None:
+                        self.request_history.append(optimized["messages"])
+
+                    logger.debug(
+                        f"ContextPilot: {len(optimized['messages'])} messages, "
+                        f"{len(optimized['context_refs'])} refs, boundaries={message_boundaries}"
+                    )
+                except Exception as e:
+                    logger.warning(f"ContextPilot optimization failed: {e}")
+                    message_boundaries = None
+
             # ⭐ 策略 1: Pad prompt to block boundary (暂时禁用，测试部分匹配)
             # padded_tokens, padding_count = self.block_aware_cache.pad_to_block_boundary(
             #     request.prompt_token_ids,
@@ -2638,6 +2683,7 @@ class Scheduler:
                 request.prompt_token_ids,  # ← Use original tokens (部分匹配会处理)
                 extra_keys=extra_keys,
                 approx_threshold=0.90,  # P0-2: 90% threshold for Approximate Skip
+                message_boundaries=message_boundaries,  # Phase 2: message-level matching
             )
 
             block_table = cache_result['block_table']
@@ -2781,6 +2827,56 @@ class Scheduler:
         logger.debug(
             f"Added request {request.request_id} with {request.num_prompt_tokens} prompt tokens"
         )
+
+    def _extract_message_boundaries(
+        self,
+        messages: List[Dict[str, Any]],
+        tokens: List[int]
+    ) -> List[int]:
+        """
+        Extract message boundaries from messages and tokens.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            tokens: The tokenized prompt (already computed)
+
+        Returns:
+            List of token positions marking message boundaries
+
+        Note:
+            This is a simplified implementation for Phase 2.
+            It estimates boundaries by tokenizing each message separately.
+            More accurate boundary extraction would require chat template awareness.
+        """
+        boundaries = []
+        cumulative_tokens = 0
+
+        try:
+            for msg in messages:
+                # Tokenize single message to estimate its token count
+                content = msg.get('content', '')
+                if isinstance(content, str):
+                    msg_text = f"{msg.get('role', 'user')}: {content}"
+                else:
+                    # Handle multimodal content (list of parts)
+                    msg_text = msg.get('role', 'user')
+
+                msg_tokens = self.tokenizer.encode(msg_text)
+                cumulative_tokens += len(msg_tokens)
+                boundaries.append(cumulative_tokens)
+
+            # Validate: total should not exceed actual token length
+            if boundaries and boundaries[-1] > len(tokens):
+                logger.warning(
+                    f"Message boundaries exceed token length: {boundaries[-1]} > {len(tokens)}, "
+                    f"using fallback (no boundaries)"
+                )
+                return []
+
+            return boundaries
+        except Exception as e:
+            logger.warning(f"Failed to extract message boundaries: {e}")
+            return []
 
     def _trim_prompt_cache_for_generation(self, cache_list: List[Any]) -> bool:
         """Trim each cache layer by one token for exact-hit generation kickoff."""

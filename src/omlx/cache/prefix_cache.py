@@ -326,6 +326,7 @@ class BlockAwarePrefixCache(CacheManager):
         tokens: List[int],
         extra_keys: Optional[Tuple[Any, ...]] = None,
         approx_threshold: float = 0.95,
+        message_boundaries: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """
         缓存匹配 + Skip Logic 决策 (支持 Full Skip 和 Approximate Skip)
@@ -334,6 +335,7 @@ class BlockAwarePrefixCache(CacheManager):
             tokens: Token sequence to match
             extra_keys: Optional extra keys for cache isolation (e.g., VLM image hash)
             approx_threshold: Threshold for approximate skip (default 0.95 = 95%)
+            message_boundaries: Optional message boundaries for message-level matching (Phase 2)
 
         Returns:
             {
@@ -345,6 +347,16 @@ class BlockAwarePrefixCache(CacheManager):
                 'approx_zero_fill_count': int  # Number of tokens to zero-fill
             }
         """
+        # Phase 2: Message-level matching (if boundaries provided)
+        # Note: This is a simplified implementation that logs message-level info
+        # but still uses block-level caching. Full message-level caching requires
+        # additional infrastructure (message_cache storage).
+        if message_boundaries:
+            logger.debug(
+                f"Message boundaries provided: {len(message_boundaries)} messages, "
+                f"boundaries={message_boundaries[:3]}..."  # Show first 3
+            )
+
         # 使用现有的 fetch_cache 方法
         block_table, remaining = self.fetch_cache("_skip_check", tokens, extra_keys)
 
