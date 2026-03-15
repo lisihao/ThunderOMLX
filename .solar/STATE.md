@@ -426,13 +426,43 @@
 
 ## Next Actions
 
-**阶段**: Phase 2 (P2) ✅ 已完成 → Phase 3: 推理引擎优化（待规划）
+**阶段**: Phase 5: ThunderOMLX 性能优化路线图（进行中）
+
+### 当前任务列表
+
+1. ✅ **Phase 1: Smart Prefetch 批量加载**（已完成，2026-03-14）
+   - ✅ 实现 `load_blocks_batch()` 并行加载
+   - ✅ 三阶段批量加载（收集、批量加载、验证重建）
+   - ✅ 添加详细 debug 日志
+   - ✅ 验证通过，确认代码执行
+   - **性能**: researcher 1.4x → 3.6x (+2.6x)
+   - **问题**: 批量加载加速比仅 1.1x（远低于 ThunderLLAMA 的 437x）
+   - **根因**: Python GIL 限制、ThreadPoolExecutor 开销、解压缩未并行、Tensor concatenation 未优化
+
+2. 🚧 **Phase 2: Batch Reconstruction 优化 Tensor 拼接**（待实施）
+   - **问题**: 21 blocks × 40 layers × 2 = 1680 次 `mx.concatenate()` 操作（70ms）
+   - **方案**: 预分配 KV buffer + 一次性填充 + 一次性 MLX 同步
+   - **预期**: 70ms → 10ms（7x 提升）
+   - **总加速**: 7x × 3.6x = 25x
+   - **实现位置**: `src/omlx/cache/prefix_cache.py:1555-1650`
+
+3. ⏳ **Phase 3: LRU-2 Block-Level Cache 内存缓存**（待实施）
+   - **问题**: 相同 prompt 第 2、3 次请求仍需重新读取 SSD
+   - **方案**: 两级 LRU（recent + frequent），缓存 tensor 数据，2GB 内存限制
+   - **预期**: 缓存命中率 80%，平均 I/O 降低 5x
+   - **总加速**: 25x × 5 = 125x（超越 ThunderLLAMA 的 55-78x 目标）
+   - **实现**: 新建 `src/omlx/cache/lru2_cache.py`
+
+4. 🚧 **时序分析：定位每一步的时间开销和优化点**（进行中）
+   - **目标**: 测量每一步实际耗时，找出时间占比最高的步骤
+   - **需要分析**: Cache lookup、SSD I/O、Decompression、MLX array creation、Tensor concatenation、MLX sync、Validation
+   - **输出**: 时序分析报告 + 优化建议优先级排序
 
 ### 已完成阶段总结
 
 - ✅ **Phase 0**: 项目搭建（Git 仓库、目录结构、Fork omlx）
 - ✅ **Phase 1 (P1)**: SSD 缓存优化
-  - P1-5: Smart Prefetch（185x SSD 加速）
+  - P1-5: Smart Prefetch（185x SSD 加速 - ThunderLLAMA）
   - P1-6: Checksum Validation（XXH64，数据完整性）
   - P1-7: Adaptive Chunk Prefill（4x-16x 内存优化）
 - ✅ **Phase 2 (P2)**: 块级缓存优化
@@ -442,27 +472,58 @@
   - P0-2: Approximate Skip（95%+ 命中零填充）
   - P0-3: Hybrid Hashing（xxHash64，50x 加速）
   - P0-4: SSD Compression（zlib，2-4x 压缩比）
+- ✅ **Phase 5.1: Smart Prefetch**（ThunderOMLX 实现）
+  - ✅ 批量加载实现（ThreadPoolExecutor）
+  - ⚠️ 性能受限（1.1x vs 437x）
 
-### 下一步行动（等待监护人批准）
+### 正在执行：Phase 5 - ThunderOMLX Skip Logic 性能优化
 
-**Phase 3 候选方向**：
+**执行时间**：2026-03-14 开始
+**目标**：通过三阶段优化，将加速比从 3.6x 提升到 25-45x
 
-**选项 A: 端到端性能验证** (推荐)
-- 运行完整 benchmark 测试（P0-1 ~ P2-9 全部特性）
-- 验证性能提升目标（> 500 tok/s，当前 119.3）
-- 生成性能报告
+#### 优化路线图
 
-**选项 B: ClawGate 端云协同集成**
-- 集成 ClawGate 路由层
-- 本地优先，云端回退
-- 智能路由策略
+**P0: Batch Reconstruction**（已完成）✅
+- **状态**：✅ 已完成（2026-03-14 19:20）
+- **实施**：预分配 buffer + 逐 block 填充 + 一次性 MLX sync
+- **效果**：
+  - Phase 3 单层：20ms → **0.6ms**（**33x** 提升）✅
+  - 40 layers 总计：800ms → **24ms**（**33x** 提升）✅
+  - researcher (长 prompt): 3.6x → **4.4x**（+22%）✅
+  - 整体提升有限（+3%），因 Phase 2（zstd 解压）成为新瓶颈
+- **文件修改**：
+  - `src/omlx/cache/type_handlers.py` (~60 行)
+  - `src/omlx/cache/prefix_cache.py` (~40 行)
+- **报告**：`/tmp/p0_performance_report.md`
 
-**选项 C: 性能优化深化**
-- Metal GPU 利用率分析
-- Kernel 融合优化
-- 内存带宽优化
+**P1: lz4 压缩**（高优先级）⭐⭐⭐⭐
+- **状态**：待开始
+- **问题**：zstd 解压慢（315ms，占 Phase 2 的 67%）
+- **方案**：切换到 lz4（解压速度 6x）
+- **预期**：315ms → 52ms，配合 P0 总加速 **8.5x**
+- **时间**：1 小时
 
-**选项 D: 打包分发准备**
-- venvstacks 配置
-- DMG 打包测试
-- 安装流程验证
+**P2: LRU-2 Cache**（中优先级）⭐⭐⭐
+- **状态**：待开始
+- **问题**：重复请求仍需读 SSD（150ms）
+- **方案**：两级 LRU 内存缓存（2GB）
+- **预期**：缓存命中率 80%，配合 P0+P1 总加速 **25-45x**
+- **时间**：4-6 小时
+
+#### 时序分析结果
+
+**完整请求时序**（长 prompt, 21 blocks, 1270ms）：
+```
+Phase 1: 收集 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 0.5ms (0.04%)
+Phase 2: 批量加载 ━━━━━━━━━━━━━━━━━━━━━━━━ 450ms (35%)
+  ├── SSD I/O: 60ms
+  ├── zstd 解压: 315ms ⚠️ 瓶颈 2 (P1 优化)
+  ├── 解析: 25ms
+  └── MLX 创建: 45ms
+Phase 3: 验证重建 ━━━━━━━━━━━━━━━━━━━━━━━━ 800ms (63%)
+  ├── Checksum: 6ms
+  ├── Concatenation: 760ms ❌ 瓶颈 1 (P0 优化)
+  └── MLX sync: 34ms
+```
+
+**详细报告**：`/tmp/timing_analysis_report.md`
