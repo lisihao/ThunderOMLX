@@ -48,8 +48,9 @@ def serve_command(args):
     import uvicorn
 
     from ._version import __version__
-    from .settings import init_settings, get_settings
     from .logging_config import configure_file_logging
+
+    from .settings import init_settings, get_settings
 
     try:
         from ._build_info import build_number
@@ -223,9 +224,12 @@ def serve_command(args):
 
 def launch_command(args):
     """Launch an external tool integrated with oMLX."""
+    import os
     import requests
 
     from .integrations import get_integration, list_integrations
+
+    # Feature flag for settings v2 migration
     from .settings import GlobalSettings
 
     tool_name = args.tool

@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+
 def _format_gb(b: int) -> str:
     """Format bytes as GB string."""
     return f"{b / 1024**3:.1f}GB"
@@ -104,6 +105,7 @@ class ProcessMemoryEnforcer:
         """
         if self._max_bytes <= 0:
             return 0
+
         from .settings import get_system_memory
 
         return max(get_system_memory() - 4 * 1024**3, self._max_bytes)
