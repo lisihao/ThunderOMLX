@@ -575,6 +575,7 @@ class VLMBatchedEngine(BaseEngine):
         vlm_inputs_embeds: Any = None,
         vlm_extra_kwargs: dict[str, Any] | None = None,
         vlm_image_hash: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
         **kwargs,
     ) -> GenerationOutput:
         """Generate a complete response (non-streaming)."""
@@ -608,6 +609,7 @@ class VLMBatchedEngine(BaseEngine):
             vlm_inputs_embeds=vlm_inputs_embeds,
             vlm_extra_kwargs=vlm_extra_kwargs,
             vlm_image_hash=vlm_image_hash,
+            messages=messages,
         )
 
         text = clean_special_tokens(output.output_text)
@@ -635,6 +637,7 @@ class VLMBatchedEngine(BaseEngine):
         vlm_inputs_embeds: Any = None,
         vlm_extra_kwargs: dict[str, Any] | None = None,
         vlm_image_hash: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
         **kwargs,
     ) -> AsyncIterator[GenerationOutput]:
         """Stream generation token by token."""
@@ -667,6 +670,7 @@ class VLMBatchedEngine(BaseEngine):
             vlm_inputs_embeds=vlm_inputs_embeds,
             vlm_extra_kwargs=vlm_extra_kwargs,
             vlm_image_hash=vlm_image_hash,
+            messages=messages,
         )
 
         finished_normally = False
@@ -729,6 +733,7 @@ class VLMBatchedEngine(BaseEngine):
             vlm_inputs_embeds=vlm_embeds,
             vlm_extra_kwargs=vlm_kwargs,
             vlm_image_hash=image_hash,
+            messages=messages,
             **kwargs,
         )
 
@@ -771,6 +776,7 @@ class VLMBatchedEngine(BaseEngine):
             vlm_inputs_embeds=vlm_embeds,
             vlm_extra_kwargs=vlm_kwargs,
             vlm_image_hash=image_hash,
+            messages=messages,
             **kwargs,
         ):
             yield output

@@ -327,6 +327,7 @@ class BatchedEngine(BaseEngine):
         repetition_penalty: float = 1.0,
         presence_penalty: float = 0.0,
         stop: list[str] | None = None,
+        messages: list[dict[str, Any]] | None = None,
         **kwargs,
     ) -> AsyncIterator[GenerationOutput]:
         """
@@ -342,6 +343,7 @@ class BatchedEngine(BaseEngine):
             repetition_penalty: Repetition penalty (1.0 = disabled)
             presence_penalty: Presence penalty (0.0 = disabled)
             stop: Stop sequences
+            messages: Optional chat messages for ContextPilot optimization
             **kwargs: Additional model-specific parameters
 
         Yields:
@@ -367,6 +369,7 @@ class BatchedEngine(BaseEngine):
         request_id = await self._engine.add_request(
             prompt=prompt,
             sampling_params=sampling_params,
+            messages=messages,
         )
 
         finished_normally = False
@@ -457,6 +460,7 @@ class BatchedEngine(BaseEngine):
             min_p=min_p,
             repetition_penalty=repetition_penalty,
             presence_penalty=presence_penalty,
+            messages=messages,
             **kwargs,
         )
 
@@ -515,6 +519,7 @@ class BatchedEngine(BaseEngine):
             min_p=min_p,
             repetition_penalty=repetition_penalty,
             presence_penalty=presence_penalty,
+            messages=messages,
             **kwargs,
         ):
             yield output
