@@ -1,58 +1,58 @@
-         66633 function calls (66597 primitive calls) in 0.170 seconds
+         66610 function calls (66574 primitive calls) in 0.161 seconds
 
    Ordered by: internal time
    List reduced from 423 to 50 due to restriction <50>
 
    ncalls  tottime  percall  cumtime  percall filename:lineno(function)
-        5    0.057    0.011    0.062    0.012 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:326(_process_prompts)
-        5    0.051    0.010    0.149    0.030 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py:1234(_next)
-       50    0.021    0.000    0.021    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/cache.py:1013(extract)
-      300    0.004    0.000    0.010    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:132(__call__)
-      400    0.003    0.000    0.010    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:327(__call__)
-      300    0.003    0.000    0.003    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/gated_delta.py:171(gated_delta_kernel)
-       20    0.003    0.000    0.010    0.001 {method 'recv' of '_socket.socket' objects}
-    10210    0.003    0.000    0.003    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx/nn/layers/base.py:99(__getattr__)
-     3910    0.002    0.000    0.003    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx/nn/layers/quantized.py:242(__call__)
-     1200    0.001    0.000    0.001    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/switch_layers.py:75(__call__)
+        5    0.057    0.011    0.065    0.013 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:326(_process_prompts)
+        5    0.051    0.010    0.148    0.030 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py:1234(_next)
+       50    0.022    0.000    0.022    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/cache.py:1013(extract)
+      300    0.003    0.000    0.009    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:132(__call__)
+      400    0.002    0.000    0.007    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:327(__call__)
+      300    0.002    0.000    0.002    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/gated_delta.py:171(gated_delta_kernel)
+     3910    0.002    0.000    0.002    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx/nn/layers/quantized.py:242(__call__)
+    10210    0.001    0.000    0.002    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx/nn/layers/base.py:99(__getattr__)
     18210    0.001    0.000    0.001    0.000 {method 'get' of 'dict' objects}
-        5    0.001    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/paged_ssd_cache.py:1902(_load_one_block)
+     1200    0.001    0.000    0.001    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/switch_layers.py:75(__call__)
+       20    0.001    0.000    0.003    0.000 {method 'recv' of '_socket.socket' objects}
       400    0.001    0.000    0.003    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/switch_layers.py:176(__call__)
-      400    0.001    0.000    0.023    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:221(__call__)
-      300    0.001    0.000    0.004    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/gated_delta.py:260(gated_delta_update)
+      400    0.001    0.000    0.019    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:221(__call__)
+        5    0.001    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/paged_ssd_cache.py:1902(_load_one_block)
+      300    0.001    0.000    0.003    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/gated_delta.py:260(gated_delta_update)
       100    0.001    0.000    0.002    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:121(__call__)
       100    0.001    0.000    0.001    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/cache.py:893(update_and_fetch)
+      400    0.001    0.000    0.001    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:168(__call__)
         5    0.001    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/paged_ssd_cache.py:2000(load_block_with_metadata)
-      400    0.001    0.000    0.002    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:168(__call__)
-       10    0.001    0.000    0.025    0.002 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:289(_step)
-     1010    0.000    0.000    0.000    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx/nn/layers/normalization.py:142(__call__)
-      300    0.000    0.000    0.001    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:71(__call__)
         5    0.000    0.000    0.005    0.001 /Users/lisihao/ThunderOMLX/src/omlx/cache/prefix_cache.py:1345(reconstruct_cache)
+      300    0.000    0.000    0.000    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:71(__call__)
+       10    0.000    0.000    0.020    0.002 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:289(_step)
       400    0.000    0.000    0.000    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/switch_layers.py:156(__call__)
-      150    0.000    0.000    0.000    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/cache.py:630(extract)
-      300    0.000    0.000    0.000    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx/nn/layers/convolution.py:76(__call__)
-    15/10    0.000    0.000    0.169    0.017 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/concurrent/futures/thread.py:71(run)
-       10    0.000    0.000    0.000    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/paged_ssd_cache.py:1523(_reconstruct_cache_data)
-        5    0.000    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:2249(_extract_cache_states)
-       15    0.000    0.000    0.000    0.000 {built-in method posix.stat}
-       10    0.000    0.000    0.024    0.002 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:247(__call__)
-        5    0.000    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:3302(_cleanup_finished)
-        5    0.000    0.000    0.000    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/hybrid_cache.py:63(from_cache_list)
-        5    0.000    0.000    0.000    0.000 {method 'encode_batch' of 'tokenizers.Tokenizer' objects}
+     1010    0.000    0.000    0.000    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx/nn/layers/normalization.py:142(__call__)
        25    0.000    0.000    0.000    0.000 {method 'control' of 'select.kqueue' objects}
-      200    0.000    0.000    0.000    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py:892(to_batch_cache)
-3047/3037    0.000    0.000    0.000    0.000 {built-in method builtins.len}
+       10    0.000    0.000    0.000    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/paged_ssd_cache.py:1523(_reconstruct_cache_data)
+      300    0.000    0.000    0.000    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx/nn/layers/convolution.py:76(__call__)
+        5    0.000    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:2336(_extract_cache_states)
+      150    0.000    0.000    0.000    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/cache.py:630(extract)
+        5    0.000    0.000    0.000    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/hybrid_cache.py:63(from_cache_list)
+       10    0.000    0.000    0.019    0.002 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:247(__call__)
+        5    0.000    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:3389(_cleanup_finished)
+        5    0.000    0.000    0.000    0.000 {method 'encode_batch' of 'tokenizers.Tokenizer' objects}
+    15/10    0.000    0.000    0.159    0.016 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/concurrent/futures/thread.py:71(run)
+       15    0.000    0.000    0.000    0.000 {built-in method posix.stat}
         5    0.000    0.000    0.000    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/hybrid_cache.py:130(from_type_list)
-        5    0.000    0.000    0.149    0.030 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py:1327(next)
+3046/3036    0.000    0.000    0.000    0.000 {built-in method builtins.len}
       150    0.000    0.000    0.000    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/type_handlers.py:676(reconstruct_cache)
-        5    0.000    0.000    0.006    0.001 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:2434(add_request)
-        5    0.000    0.000    0.002    0.000 {method 'join' of '_thread._ThreadHandle' objects}
+      200    0.000    0.000    0.000    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py:892(to_batch_cache)
+        5    0.000    0.000    0.005    0.001 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:2521(add_request)
+      600    0.000    0.000    0.000    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/type_registry.py:82(get_handler_by_class_name)
       600    0.000    0.000    0.000    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/cache.py:593(__new__)
       900    0.000    0.000    0.000    0.000 {built-in method builtins.hasattr}
-      600    0.000    0.000    0.000    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/type_registry.py:82(get_handler_by_class_name)
-       10    0.000    0.000    0.000    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/base.py:24(create_causal_mask)
-     1825    0.000    0.000    0.000    0.000 {built-in method builtins.isinstance}
-        5    0.000    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:3070(_process_batch_responses)
-    26/25    0.000    0.000    0.181    0.007 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:1966(_run_once)
+     1823    0.000    0.000    0.000    0.000 {built-in method builtins.isinstance}
        10    0.000    0.000    0.000    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:297(make_cache)
+        5    0.000    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:3157(_process_batch_responses)
+     1200    0.000    0.000    0.000    0.000 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/enum.py:1299(__hash__)
+     1545    0.000    0.000    0.000    0.000 {method 'append' of 'list' objects}
+      200    0.000    0.000    0.000    0.000 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:153(_cache_layer_token_count)
+    26/25    0.000    0.000    0.164    0.007 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:1966(_run_once)
 
 

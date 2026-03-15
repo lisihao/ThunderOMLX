@@ -681,14 +681,17 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
             **step_kwargs,
         )
 
-        self._emit_boundary_snapshots(
-            uids=list(uids),
-            lengths=lengths,
-            base_sizes=base_sizes,
-            prompt_cache=prompt_cache,
-            emitted=emitted_boundaries,
-            use_full_prompt_lengths=True,
-        )
+        # Skip boundary snapshots in FULL SKIP mode - no new prefill computation
+        # so no need to emit boundary tracking (saves ~2-3ms)
+        if not full_skip_mode:
+            self._emit_boundary_snapshots(
+                uids=list(uids),
+                lengths=lengths,
+                base_sizes=base_sizes,
+                prompt_cache=prompt_cache,
+                emitted=emitted_boundaries,
+                use_full_prompt_lengths=True,
+            )
 
         mx.async_eval(y, logprobs)
 

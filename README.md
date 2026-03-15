@@ -126,6 +126,26 @@
 
 详见: [`docs/TOKENIZER_OPTIMIZATION.md`](docs/TOKENIZER_OPTIMIZATION.md)
 
+### 2.8 _process_prompts 性能优化（2026-03-14 完成）✅
+
+- ⚡ **5.3% 加速**：总时间从 34ms → 32.2ms（-1.8ms/次）
+- 🎯 **条件化跳过**：FULL SKIP 模式下跳过 boundary snapshots
+- 🔧 **专家会审**：审判官 + 稳健派联合分析，建设者实现
+- 📊 **新瓶颈**：_process_prompts (35%)、MLX generate (32%)
+
+**性能对比**:
+```
+┌────────────────────┬──────────┬──────────┬──────────┐
+│      指标          │  优化前  │  优化后  │  提升    │
+├────────────────────┼──────────┼──────────┼──────────┤
+│ 总时间 (5次)       │ 170 ms   │ 161 ms   │ -5.3%    │
+│ 平均时间/次        │ 34 ms    │ 32.2 ms  │ -1.8ms   │
+│ _process_prompts   │ 11.4 ms  │ 11.4 ms  │ ~0ms     │
+└────────────────────┴──────────┴──────────┴──────────┘
+```
+
+详见: [`docs/PROCESS_PROMPTS_OPTIMIZATION.md`](docs/PROCESS_PROMPTS_OPTIMIZATION.md)
+
 ### 3. ThunderLLAMA 推理引擎（待集成）
 
 - 🔥 **Apple Silicon 优化**：Metal GPU 加速 + Unified Memory
