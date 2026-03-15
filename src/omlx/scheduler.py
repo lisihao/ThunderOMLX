@@ -81,6 +81,16 @@ except ImportError:
     is_harmony_model = None
     HAS_HARMONY_ADAPTER = False
 
+# Import chunked prefill engine for long prompts
+try:
+    from .chunked_prefill import ChunkedPrefillEngine, ChunkedPrefillConfig
+
+    HAS_CHUNKED_PREFILL = True
+except ImportError:
+    ChunkedPrefillEngine = None
+    ChunkedPrefillConfig = None
+    HAS_CHUNKED_PREFILL = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -1157,6 +1167,14 @@ class Scheduler:
                 )
         else:
             logger.info("oMLX cache disabled (mlx-lm BatchGenerator manages KV internally)")
+
+        # Initialize chunked prefill engine for long prompts
+        if HAS_CHUNKED_PREFILL:
+            self.chunked_prefill_config = ChunkedPrefillConfig.from_env()
+            self.chunked_prefill_engine = ChunkedPrefillEngine(model, self.chunked_prefill_config)
+        else:
+            self.chunked_prefill_config = None
+            self.chunked_prefill_engine = None
 
         # ⚡ Performance optimization: Cache tokenizer vocab to avoid repeated get_vocab() calls
         # Background: tokenizer.get_vocab() takes ~45ms and was called 20+ times per generation

@@ -663,7 +663,7 @@ class PagedSSDCacheManager(CacheManager):
         hot_cache_max_bytes: int = 0,
         enable_compression: bool = True,
         compression_level: int = 6,
-        enable_prefetch: bool = True,
+        enable_prefetch: bool = None,
         prefetch_top_n: int = 50,
         prefetch_interval: float = 10.0,
         enable_checksum: bool = True,
@@ -771,6 +771,10 @@ class PagedSSDCacheManager(CacheManager):
         )
 
         # --- P1-5: Smart Prefetch ---
+        # Read from environment variable if not explicitly set
+        if enable_prefetch is None:
+            enable_prefetch = os.getenv("OMLX_ENABLE_ASYNC_PREFETCH", "false").lower() == "true"
+
         self.enable_prefetch = enable_prefetch
         self.prefetch_top_n = prefetch_top_n
         self.prefetch_interval = prefetch_interval
