@@ -28,7 +28,7 @@ BUILD_DIR = SCRIPT_DIR / "_build"
 EXPORT_DIR = SCRIPT_DIR / "_export"
 DIST_DIR = SCRIPT_DIR / "dist"
 WHEELS_DIR = SCRIPT_DIR / "_wheels"
-APP_NAME = "oMLX"
+APP_NAME = "ThunderOMLX"
 APP_BUNDLE = f"{APP_NAME}.app"
 
 
@@ -685,7 +685,7 @@ def create_app_bundle():
     info_plist = {
         "CFBundleName": APP_NAME,
         "CFBundleDisplayName": APP_NAME,
-        "CFBundleIdentifier": "com.omlx.app",
+        "CFBundleIdentifier": "com.thunderomlx.app",
         "CFBundleVersion": VERSION,
         "CFBundleShortVersionString": VERSION,
         "CFBundleExecutable": APP_NAME,
@@ -696,7 +696,7 @@ def create_app_bundle():
         "LSUIElement": True,
         "NSHighResolutionCapable": True,
         "LSArchitecturePriority": ["arm64"],
-        "NSHumanReadableCopyright": f"Copyright 2024 oMLX contributors. Version {VERSION}",
+        "NSHumanReadableCopyright": f"ThunderOMLX powered by oMLX. Version {VERSION}",
     }
 
     with open(contents_dir / "Info.plist", "wb") as f:

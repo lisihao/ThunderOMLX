@@ -106,7 +106,7 @@ class OMLXAppDelegate(NSObject):
         from AppKit import NSAlert
 
         alert = NSAlert.alloc().init()
-        alert.setMessageText_("oMLX Failed to Launch")
+        alert.setMessageText_("ThunderOMLX Failed to Launch")
         alert.setInformativeText_(message)
         alert.addButtonWithTitle_("Quit")
         alert.runModal()
@@ -258,7 +258,7 @@ class OMLXAppDelegate(NSObject):
             self.status_item.setTitle_("")
         else:
             # Fallback to text if icons not available
-            self.status_item.setTitle_("oMLX")
+            self.status_item.setTitle_("ThunderOMLX")
 
     # --- Update checking ---
 
@@ -512,20 +512,20 @@ class OMLXAppDelegate(NSObject):
 
         # --- Status Header (colored dot + text) ---
         if status == ServerStatus.RUNNING:
-            status_text = "● oMLX Server is running"
+            status_text = "● ThunderOMLX Server is running"
             status_color = NSColor.systemGreenColor()
         elif status == ServerStatus.STARTING:
-            status_text = "● oMLX Server is starting..."
+            status_text = "● ThunderOMLX Server is starting..."
             status_color = NSColor.systemOrangeColor()
         elif status == ServerStatus.UNRESPONSIVE:
-            status_text = "● oMLX Server is not responding"
+            status_text = "● ThunderOMLX Server is not responding"
             status_color = NSColor.systemOrangeColor()
         elif status == ServerStatus.ERROR:
             error_detail = self.server_manager.error_message or "Unknown error"
             status_text = f"● {error_detail}"
             status_color = NSColor.systemRedColor()
         else:
-            status_text = "● oMLX Server is stopped"
+            status_text = "● ThunderOMLX Server is stopped"
             status_color = NSColor.secondaryLabelColor()
 
         attributed_status = NSAttributedString.alloc().initWithString_attributes_(
@@ -703,7 +703,7 @@ class OMLXAppDelegate(NSObject):
 
         # --- Chat with oMLX ---
         chat_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Chat with oMLX", "openChat:", ""
+            "Chat with ThunderOMLX", "openChat:", ""
         )
         chat_item.setTarget_(self)
 
@@ -730,7 +730,7 @@ class OMLXAppDelegate(NSObject):
 
         # --- About ---
         about_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "About oMLX", "showAbout:", ""
+            "About ThunderOMLX", "showAbout:", ""
         )
         about_item.setTarget_(self)
         about_icon = self._create_menu_icon("info.circle")
@@ -742,7 +742,7 @@ class OMLXAppDelegate(NSObject):
 
         # --- Quit ---
         quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Quit oMLX", "quitApp:", "q"
+            "Quit ThunderOMLX", "quitApp:", "q"
         )
         quit_item.setTarget_(self)
         quit_icon = self._create_menu_icon("power")
@@ -993,7 +993,7 @@ class OMLXAppDelegate(NSObject):
         from AppKit import NSAlert, NSAlertFirstButtonReturn
 
         alert = NSAlert.alloc().init()
-        alert.setMessageText_("About oMLX")
+        alert.setMessageText_("About ThunderOMLX")
 
         try:
             from omlx._build_info import build_number
@@ -1005,7 +1005,8 @@ class OMLXAppDelegate(NSObject):
             version_text += f"\nBuild: {build_number}"
 
         alert.setInformativeText_(
-            "oMLX - LLM inference,\noptimized for your Mac\n\n"
+            "ThunderOMLX\npowered by oMLX\n\n"
+            "LLM inference, optimized for your Mac\n"
             "Built with MLX, mlx-lm, and mlx-vlm\n"
             f"{version_text}"
         )

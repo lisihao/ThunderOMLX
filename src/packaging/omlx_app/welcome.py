@@ -104,7 +104,7 @@ class WelcomeWindowController(NSObject):
         self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             frame, style, NSBackingStoreBuffered, False
         )
-        self.window.setTitle_("Welcome to oMLX")
+        self.window.setTitle_("Welcome to ThunderOMLX")
         self.window.center()
         self.window.setReleasedWhenClosed_(False)
 
@@ -144,7 +144,7 @@ class WelcomeWindowController(NSObject):
 
         # === Title ===
         y -= 34
-        title = NSTextField.labelWithString_("Welcome to oMLX")
+        title = NSTextField.labelWithString_("Welcome to ThunderOMLX")
         title.setFont_(NSFont.systemFontOfSize_weight_(24, 0.5))
         title.setAlignment_(NSCenterTextAlignment)
         title.setFrame_(NSMakeRect(40, y, WINDOW_WIDTH - 80, 32))
@@ -153,7 +153,7 @@ class WelcomeWindowController(NSObject):
         # Subtitle
         y -= 22
         subtitle = NSTextField.labelWithString_(
-            "LLM inference, optimized for your Mac"
+            "LLM inference, optimized for your Mac \u2022 powered by oMLX"
         )
         subtitle.setFont_(NSFont.systemFontOfSize_(13))
         subtitle.setTextColor_(NSColor.secondaryLabelColor())
