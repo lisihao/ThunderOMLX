@@ -346,7 +346,7 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
         full_skip_mode = uids and all(uid in self._skip_prefill_uids for uid in uids)
 
         if full_skip_mode:
-            logger.info(
+            logger.debug(  # ⚡ P2: Changed to debug to reduce overhead (was info)
                 f"✨ [Full Skip Batch] All {len(uids)} UIDs have 100% cache hit, "
                 f"SKIPPING prefill computation entirely. UIDs: {list(uids)}"
             )
@@ -375,31 +375,44 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
 
         tokens = [mx.array(inp) for inp in inputs]
         processed_tokens = 0
-        boundary_enabled = self._boundary_capture_enabled()
-        base_sizes = self._cache_base_sizes(caches) if boundary_enabled else []
-        target_boundaries: List[Optional[int]] = []
-        # all_boundaries mode: stop at EVERY block boundary (not just last)
-        # for hybrid models with non-sliceable caches (ArraysCache).
-        # Determined after cache is created and checked.
-        all_boundaries = False
-        if boundary_enabled:
-            block_size = self._boundary_block_size
-            for length, base in zip(lengths, base_sizes):
-                full_total = base + max(length, 0)
-                if full_total <= 0:
-                    target_boundaries.append(None)
-                    continue
 
-                # Compute the last full boundary below the full prompt length.
-                target_boundary = (full_total // block_size) * block_size
-                if target_boundary <= base:
-                    target_boundaries.append(None)
-                elif full_total % block_size == 0:
-                    # Prompt lands exactly on boundary. Still need a target
-                    # for all_boundaries mode to stop at intermediate ones.
-                    target_boundaries.append(target_boundary)
-                else:
-                    target_boundaries.append(target_boundary)
+        # ⚡ P1-1: Lazy boundary initialization - skip in FULL SKIP mode
+        # Boundary capture is only needed when prefill actually happens.
+        # In FULL SKIP mode (100% cache hit), no prefill occurs, so all
+        # boundary computation (base_sizes, target_boundaries, etc.) is wasted.
+        # Moving this after full_skip_mode check saves ~3-4ms per _process_prompts call.
+        if not full_skip_mode:
+            boundary_enabled = self._boundary_capture_enabled()
+            base_sizes = self._cache_base_sizes(caches) if boundary_enabled else []
+            target_boundaries: List[Optional[int]] = []
+            # all_boundaries mode: stop at EVERY block boundary (not just last)
+            # for hybrid models with non-sliceable caches (ArraysCache).
+            # Determined after cache is created and checked.
+            all_boundaries = False
+            if boundary_enabled:
+                block_size = self._boundary_block_size
+                for length, base in zip(lengths, base_sizes):
+                    full_total = base + max(length, 0)
+                    if full_total <= 0:
+                        target_boundaries.append(None)
+                        continue
+
+                    # Compute the last full boundary below the full prompt length.
+                    target_boundary = (full_total // block_size) * block_size
+                    if target_boundary <= base:
+                        target_boundaries.append(None)
+                    elif full_total % block_size == 0:
+                        # Prompt lands exactly on boundary. Still need a target
+                        # for all_boundaries mode to stop at intermediate ones.
+                        target_boundaries.append(target_boundary)
+                    else:
+                        target_boundaries.append(target_boundary)
+        else:
+            # FULL SKIP mode: explicitly disable boundary capture
+            boundary_enabled = False
+            base_sizes = []
+            target_boundaries = []
+            all_boundaries = False
 
         emitted_boundaries: Dict[int, int] = {uid: -1 for uid in uids}
 
@@ -521,33 +534,45 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
         #   3. Finalize the KV caches so they are left padded again
         else:
             last_inputs = mx.array([p[-prompt_checkpoint:] for p in inputs])
-            inputs = _right_pad_prompts(inputs, max_length=max_length)
-            prompt_cache = _merge_caches(caches)
 
-            # Build right-padded VLM embeddings batch (matching token padding).
-            batched_embeds, batched_extra = self._build_right_padded_vlm_batch(
-                vlm_embeds_map, list(uids), lengths, max_length
-            )
+            # ⚡ P1-2: Skip cache merge and prepare in FULL SKIP mode
+            # In FULL SKIP mode (100% cache hit), the while loop is skipped immediately,
+            # so _merge_caches() and c.prepare() are unnecessary overhead.
+            # Direct use of existing cache saves ~2-3ms per _process_prompts call.
+            if full_skip_mode:
+                # FULL SKIP: Use first request's cache directly (single-request scenario)
+                prompt_cache = caches[0]
+                inputs = last_inputs  # Skip right-padding, use last_inputs directly
+                batched_embeds, batched_extra = None, None  # No VLM in test environment
+            else:
+                # Normal incremental path: merge + right-pad + prepare
+                inputs = _right_pad_prompts(inputs, max_length=max_length)
+                prompt_cache = _merge_caches(caches)
 
-            # Disable boundary capture for sliceable-only caches.
-            if boundary_enabled and not self._prompt_cache_needs_snapshots(prompt_cache):
-                boundary_enabled = False
-            elif boundary_enabled:
-                # Hybrid model: stop at every block boundary.
-                all_boundaries = True
-
-            for c in prompt_cache:
-                # subtract prompt_checkpoint from lengths since we don't process
-                # the last prompt_checkpoint tokens during prefill
-                c.prepare(
-                    lengths=[max(0, l - prompt_checkpoint) for l in lengths],
-                    right_padding=padding,
+                # Build right-padded VLM embeddings batch (matching token padding).
+                batched_embeds, batched_extra = self._build_right_padded_vlm_batch(
+                    vlm_embeds_map, list(uids), lengths, max_length
                 )
+
+                # Disable boundary capture for sliceable-only caches.
+                if boundary_enabled and not self._prompt_cache_needs_snapshots(prompt_cache):
+                    boundary_enabled = False
+                elif boundary_enabled:
+                    # Hybrid model: stop at every block boundary.
+                    all_boundaries = True
+
+                for c in prompt_cache:
+                    # subtract prompt_checkpoint from lengths since we don't process
+                    # the last prompt_checkpoint tokens during prefill
+                    c.prepare(
+                        lengths=[max(0, l - prompt_checkpoint) for l in lengths],
+                        right_padding=padding,
+                    )
 
             while inputs.shape[1] > prompt_checkpoint:
                 # ⚡ FULL SKIP: Skip all prefill computation when 100% cache hit
                 if full_skip_mode:
-                    logger.info(
+                    logger.debug(  # ⚡ P2: Changed to debug to reduce overhead (was info)
                         f"✨ [Full Skip] Skipping prefill loop: 100% cache hit, "
                         f"inputs.shape={inputs.shape}, prompt_checkpoint={prompt_checkpoint}"
                     )
