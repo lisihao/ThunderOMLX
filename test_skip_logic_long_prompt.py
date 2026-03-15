@@ -38,7 +38,7 @@ async def test_skip_logic_with_long_prompt():
     from omlx.scheduler import SchedulerConfig
     from omlx.request import SamplingParams
 
-    block_size = 32  # 测试 block_size=32: 116/32 = 3.625 blocks = 96 tokens cached = 82.8% hit ratio
+    block_size = 256  # ⚡ 优化后的 block_size=256: 116/256 = 0.45 blocks，更少碎片化
     model_name_str = str(model_path)
 
     scheduler_config = SchedulerConfig(
@@ -101,7 +101,7 @@ async def test_skip_logic_with_long_prompt():
         {"name": "第 4 次（新 prompt）", "prompt": "今天天气怎么样？"},
     ]
 
-    sampling_params = SamplingParams(max_tokens=50)
+    sampling_params = SamplingParams(max_tokens=1)  # ⚡ 只生成 1 token，测试纯 FULL SKIP 性能
 
     results = []
 

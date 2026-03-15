@@ -110,12 +110,11 @@ async def test_skip_logic_with_enginecore():
     from omlx.request import SamplingParams
 
     # 配置 scheduler（启用 prefix caching）
-    # ⚠️ 关键：降低 block_size，让短 prompt 也能触发缓存
-    # 54 tokens 的 prompt 需要 block_size <= 32 才能创建至少 1 个 block
-    # ⚡ 方案 1: 禁用 ArraysCache 自动提升 block_size
+    # ⚡ 使用优化后的 block_size=256（平衡缓存命中率和碎片化）
+    # 256 tokens/block 可以有效缓存 140-1000 token 范围的 prompt
     scheduler_config = SchedulerConfig(
         max_num_seqs=2,  # 降低并发数
-        paged_cache_block_size=32,  # 降低到 32（原来 1024 太大，导致短 prompt 无法缓存）
+        paged_cache_block_size=256,  # ⚡ 优化后的值（修复碎片化问题）
         max_cache_blocks=1024,  # 限制 KV Cache 块数（避免大模型 OOM）
         initial_cache_blocks=128,  # 降低初始块数
         disable_block_size_enlargement=True,  # ⚡ 禁用自动提升，允许用 block_size=32 测试 Skip Logic

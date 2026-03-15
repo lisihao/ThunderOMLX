@@ -105,6 +105,27 @@
 - ✅ **验证**：4 个活跃 Agent 全部达到 100% cache hit + FULL SKIP
 - 📁 **配置文件**：`openclaw_agent_cache_config.py` 开箱即用
 
+### 2.7 Tokenizer 性能优化（2026-03-14 完成）✅
+
+- 🔥 **9.1x 加速**：总时间从 308ms → 34ms（-89%）
+- 💾 **内存缓存**：tokenizer.get_vocab() 167x 加速（95ms → 0.57ms）
+- 💿 **磁盘缓存**：启动时从 ~/.cache 加载 vocab（45ms → 34ms）
+- ✅ **完整性校验**：Size + Hash 双重校验，自动降级修复
+- 📊 **新瓶颈**：_process_prompts (33%)、MLX generate (30%)
+
+**性能对比**:
+```
+┌────────────────┬──────────┬──────────┬──────────┐
+│    指标        │  优化前  │  优化后  │  提升    │
+├────────────────┼──────────┼──────────┼──────────┤
+│ 总时间 (5次)   │ 1.541 s  │ 0.170 s  │ -89%     │
+│ 平均时间/次    │ 308 ms   │ 34 ms    │ 9.1x     │
+│ Tokenizer 耗时 │ 907 ms   │ ~0 ms    │ 消除     │
+└────────────────┴──────────┴──────────┴──────────┘
+```
+
+详见: [`docs/TOKENIZER_OPTIMIZATION.md`](docs/TOKENIZER_OPTIMIZATION.md)
+
 ### 3. ThunderLLAMA 推理引擎（待集成）
 
 - 🔥 **Apple Silicon 优化**：Metal GPU 加速 + Unified Memory
