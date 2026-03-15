@@ -2635,11 +2635,14 @@ class PagedSSDCacheManager(CacheManager):
         """
         从 SSD 加载块（供预取器调用）（P1-5）。
 
+        ⚠️ 此函数在工作线程中执行，不能包含 Metal GPU 操作！
+        只负责磁盘 I/O，Metal 操作在主线程的回调中完成。
+
         Args:
             block_hash: 块哈希
 
         Returns:
-            包含 tensors_raw 和 metadata 的字典，或 None
+            包含 raw_data 和 metadata 的字典，或 None
         """
         if not HAS_MLX:
             return None
@@ -2656,9 +2659,9 @@ class PagedSSDCacheManager(CacheManager):
             return None
 
         try:
-            # P1: Load from disk (with decompression if needed)
+            # P1: Load raw bytes from disk (with decompression if needed)
+            # ⚠️ 只做 I/O，不做 Metal GPU 操作
             if file_path.suffix in ('.lz4', '.zst'):
-                import tempfile
                 decompress_start = time.time()
 
                 with open(file_path, 'rb') as f:
@@ -2679,29 +2682,25 @@ class PagedSSDCacheManager(CacheManager):
                     f"{len(compressed_data)} → {len(raw_data)} bytes, {decompress_elapsed:.1f}ms"
                 )
 
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.safetensors') as tmp:
-                    tmp.write(raw_data)
-                    temp_path_str = tmp.name
-
-                arrays, file_metadata = mx.load(temp_path_str, return_metadata=True)
-                Path(temp_path_str).unlink()
+                # 返回原始 safetensors 数据，不调用 mx.load()
+                return {
+                    'raw_data': raw_data,
+                    'block_metadata': metadata,
+                    'is_compressed': True
+                }
             else:
-                arrays, file_metadata = mx.load(str(file_path), return_metadata=True)
+                # 未压缩文件，直接读取
+                with open(file_path, 'rb') as f:
+                    raw_data = f.read()
 
-            # Extract raw bytes for hot cache insertion
-            tensors_raw = {}
-            for name, arr in arrays.items():
-                mx.eval(arr)  # Ensure evaluated
-                tensors_raw[name] = _extract_tensor_bytes(arr)
-
-            return {
-                'tensors_raw': tensors_raw,
-                'file_metadata': file_metadata,
-                'block_metadata': metadata
-            }
+                return {
+                    'raw_data': raw_data,
+                    'block_metadata': metadata,
+                    'is_compressed': False
+                }
 
         except Exception as e:
-            logger.error(f"Failed to prefetch block {block_hash.hex()[:8]}...: {e}")
+            logger.error(f"Failed to load block {block_hash.hex()[:8]}...: {e}")
             return None
 
     def _on_block_prefetched(
@@ -2712,20 +2711,44 @@ class PagedSSDCacheManager(CacheManager):
         """
         预取完成回调（供预取器调用）（P1-5）。
 
+        ⚠️ 此函数在主线程中执行，可以安全地进行 Metal GPU 操作。
+
         Args:
             block_hash: 块哈希
-            block_data: 块数据（包含 tensors_raw 和 metadata）
+            block_data: 块数据（包含 raw_data 和 metadata）
         """
         if not self._hot_cache_enabled:
             logger.debug("Hot cache disabled, skipping prefetched block insertion")
             return
 
+        if not HAS_MLX:
+            return
+
         try:
+            import tempfile
+
             metadata = block_data['block_metadata']
+            raw_data = block_data['raw_data']
+
+            # 在主线程中执行 Metal GPU 操作
+            # 将原始 safetensors 数据加载为 MLX 数组
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.safetensors') as tmp:
+                tmp.write(raw_data)
+                temp_path_str = tmp.name
+
+            arrays, file_metadata = mx.load(temp_path_str, return_metadata=True)
+            Path(temp_path_str).unlink()
+
+            # Extract raw bytes for hot cache insertion
+            tensors_raw = {}
+            for name, arr in arrays.items():
+                # 强制评估，确保 Metal 操作完成（修复 Metal GPU 同步问题）
+                mx.eval(arr)
+                tensors_raw[name] = _extract_tensor_bytes(arr)
 
             cache_entry = {
-                'tensors_raw': block_data['tensors_raw'],
-                'file_metadata': block_data['file_metadata'],
+                'tensors_raw': tensors_raw,
+                'file_metadata': file_metadata,
                 'num_layers': metadata.num_layers,
                 'layer_cache_types': metadata.layer_cache_types,
                 'block_metadata': metadata,
