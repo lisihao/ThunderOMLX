@@ -1,0 +1,78 @@
+The tokenizer you are loading from '/Users/lisihao/models/qwen3.5-35b-mlx' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+Error in batch generation step: 
+Traceback (most recent call last):
+  File "/Users/lisihao/ThunderOMLX/src/omlx/scheduler.py", line 3780, in step
+    responses = self.batch_generator.next()
+  File "/opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py", line 1329, in next
+    return self._next()
+           ~~~~~~~~~~^^
+  File "/opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py", line 1257, in _next
+    batch = self._process_prompts(prompts)
+  File "/Users/lisihao/ThunderOMLX/src/omlx/scheduler.py", line 366, in _process_prompts
+    prompt_cache = _merge_caches(caches)
+  File "/opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py", line 922, in _merge_caches
+    batch_cache.append(caches[0][i].merge([c[i] for c in caches]))
+                       ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/cache.py", line 664, in merge
+    c_init = next(iter(c[e] for c in caches if c[e] is not None))
+StopIteration
+
+Engine loop error: StopIteration interacts badly with generators and cannot be raised into a Future
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/concurrent/futures/thread.py", line 86, in run
+    result = ctx.run(self.task)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/concurrent/futures/thread.py", line 73, in run
+    return fn(*args, **kwargs)
+  File "/Users/lisihao/ThunderOMLX/src/omlx/scheduler.py", line 3780, in step
+    responses = self.batch_generator.next()
+  File "/opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py", line 1329, in next
+    return self._next()
+           ~~~~~~~~~~^^
+  File "/opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py", line 1257, in _next
+    batch = self._process_prompts(prompts)
+  File "/Users/lisihao/ThunderOMLX/src/omlx/scheduler.py", line 366, in _process_prompts
+    prompt_cache = _merge_caches(caches)
+  File "/opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py", line 922, in _merge_caches
+    batch_cache.append(caches[0][i].merge([c[i] for c in caches]))
+                       ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/cache.py", line 664, in merge
+    c_init = next(iter(c[e] for c in caches if c[e] is not None))
+StopIteration
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/lisihao/ThunderOMLX/src/omlx/engine_core.py", line 175, in _engine_loop
+    output = await loop.run_in_executor(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        self._mlx_executor, self.scheduler.step
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+RuntimeError: StopIteration interacts badly with generators and cannot be raised into a Future
+
+🔍 DEBUG: _init_tiered_cache called, HAS_TIERED_CACHE=True
+🔍 DEBUG: paged_ssd_cache_dir=/Users/lisihao/.cache/omlx/profile
+✅ DEBUG: Initializing PagedSSDCacheManager...
+   cache_dir=/Users/lisihao/.cache/omlx/profile
+   max_size=50.0GB
+   hot_cache=0.0GB
+✅ DEBUG: PagedSSDCacheManager initialized successfully!
+Traceback (most recent call last):
+  File "/Users/lisihao/ThunderOMLX/test_python_profiling.py", line 105, in <module>
+    asyncio.run(run_profiling())
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/Users/lisihao/ThunderOMLX/test_python_profiling.py", line 47, in run_profiling
+    await engine.generate(prompt=prompt, sampling_params=sampling_params)
+  File "/Users/lisihao/ThunderOMLX/src/omlx/engine_core.py", line 496, in generate
+    raise RuntimeError(final_output.error)
+RuntimeError: StopIteration interacts badly with generators and cannot be raised into a Future

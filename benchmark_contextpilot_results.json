@@ -1,0 +1,202 @@
+[
+  {
+    "idx": 0,
+    "agent_id": "researcher-agent",
+    "prompt_tokens": 163,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 7816.4,
+    "total_ms": 7816.4,
+    "gen_tps": 0
+  },
+  {
+    "idx": 1,
+    "agent_id": "researcher-agent",
+    "prompt_tokens": 162,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 859.9,
+    "total_ms": 859.9,
+    "gen_tps": 0
+  },
+  {
+    "idx": 2,
+    "agent_id": "coder-agent",
+    "prompt_tokens": 156,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 835.6,
+    "total_ms": 835.6,
+    "gen_tps": 0
+  },
+  {
+    "idx": 3,
+    "agent_id": "researcher-agent",
+    "prompt_tokens": 161,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 838.3,
+    "total_ms": 838.3,
+    "gen_tps": 0
+  },
+  {
+    "idx": 4,
+    "agent_id": "analyst-agent",
+    "prompt_tokens": 112,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 811.8,
+    "total_ms": 811.8,
+    "gen_tps": 0
+  },
+  {
+    "idx": 5,
+    "agent_id": "researcher-agent",
+    "prompt_tokens": 158,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 839.1,
+    "total_ms": 839.1,
+    "gen_tps": 0
+  },
+  {
+    "idx": 6,
+    "agent_id": "pm-agent",
+    "prompt_tokens": 86,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 760.5,
+    "total_ms": 760.5,
+    "gen_tps": 0
+  },
+  {
+    "idx": 7,
+    "agent_id": "pm-agent",
+    "prompt_tokens": 83,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 754.3,
+    "total_ms": 754.3,
+    "gen_tps": 0
+  },
+  {
+    "idx": 8,
+    "agent_id": "coder-agent",
+    "prompt_tokens": 151,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 831.1,
+    "total_ms": 831.1,
+    "gen_tps": 0
+  },
+  {
+    "idx": 9,
+    "agent_id": "coder-agent",
+    "prompt_tokens": 152,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 835.9,
+    "total_ms": 835.9,
+    "gen_tps": 0
+  },
+  {
+    "idx": 10,
+    "agent_id": "researcher-agent",
+    "prompt_tokens": 163,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 594.4,
+    "total_ms": 594.4,
+    "gen_tps": 0
+  },
+  {
+    "idx": 11,
+    "agent_id": "analyst-agent",
+    "prompt_tokens": 109,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 815.9,
+    "total_ms": 815.9,
+    "gen_tps": 0
+  },
+  {
+    "idx": 12,
+    "agent_id": "researcher-agent",
+    "prompt_tokens": 162,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 593.7,
+    "total_ms": 593.7,
+    "gen_tps": 0
+  },
+  {
+    "idx": 13,
+    "agent_id": "researcher-agent",
+    "prompt_tokens": 161,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 600.7,
+    "total_ms": 600.7,
+    "gen_tps": 0
+  },
+  {
+    "idx": 14,
+    "agent_id": "analyst-agent",
+    "prompt_tokens": 105,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 811.0,
+    "total_ms": 811.0,
+    "gen_tps": 0
+  },
+  {
+    "idx": 15,
+    "agent_id": "coder-agent",
+    "prompt_tokens": 152,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 835.4,
+    "total_ms": 835.4,
+    "gen_tps": 0
+  },
+  {
+    "idx": 16,
+    "agent_id": "coder-agent",
+    "prompt_tokens": 149,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 834.9,
+    "total_ms": 834.9,
+    "gen_tps": 0
+  },
+  {
+    "idx": 17,
+    "agent_id": "coder-agent",
+    "prompt_tokens": 156,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 596.5,
+    "total_ms": 596.5,
+    "gen_tps": 0
+  },
+  {
+    "idx": 18,
+    "agent_id": "coder-agent",
+    "prompt_tokens": 151,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 592.4,
+    "total_ms": 592.4,
+    "gen_tps": 0
+  },
+  {
+    "idx": 19,
+    "agent_id": "researcher-agent",
+    "prompt_tokens": 158,
+    "completion_tokens": 50,
+    "cached_tokens": null,
+    "ttft_ms": 595.8,
+    "total_ms": 595.8,
+    "gen_tps": 0
+  }
+]

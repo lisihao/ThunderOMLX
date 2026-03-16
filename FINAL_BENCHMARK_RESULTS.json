@@ -1,0 +1,254 @@
+{
+  "推荐配置": {
+    "512": {
+      "success": true,
+      "latency": 13.13831901550293,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "error": null
+    },
+    "1024": {
+      "success": true,
+      "latency": 2.1870429515838623,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "error": null
+    },
+    "2048": {
+      "success": true,
+      "latency": 3.5650312900543213,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "error": null
+    },
+    "3072": {
+      "success": true,
+      "latency": 3.7259247303009033,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "error": null
+    }
+  },
+  "保守配置": {
+    "512": {
+      "success": true,
+      "latency": 13.063775062561035,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "error": null
+    },
+    "1024": {
+      "success": true,
+      "latency": 2.230891704559326,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "error": null
+    },
+    "2048": {
+      "success": true,
+      "latency": 3.6291677951812744,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "error": null
+    },
+    "3072": {
+      "success": true,
+      "latency": 3.717722177505493,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "error": null
+    }
+  },
+  "基线配置": {
+    "512": {
+      "success": true,
+      "latency": 13.236022710800171,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "error": null
+    },
+    "1024": {
+      "success": true,
+      "latency": 2.2527408599853516,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "error": null
+    },
+    "2048": {
+      "success": true,
+      "latency": 3.6838669776916504,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "error": null
+    },
+    "3072": {
+      "success": true,
+      "latency": 3.833026170730591,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "error": null
+    }
+  },
+  "test_lengths": [
+    512,
+    1024,
+    2048,
+    3072
+  ]
+}

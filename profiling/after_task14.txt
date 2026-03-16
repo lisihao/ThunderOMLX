@@ -1,35 +1,56 @@
-         64910 function calls (64874 primitive calls) in 0.158 seconds
+The tokenizer you are loading from '/Users/lisihao/models/qwen3.5-35b-mlx' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+🔍 DEBUG: _init_tiered_cache called, HAS_TIERED_CACHE=True
+🔍 DEBUG: paged_ssd_cache_dir=/Users/lisihao/.cache/omlx/profile
+✅ DEBUG: Initializing PagedSSDCacheManager...
+   cache_dir=/Users/lisihao/.cache/omlx/profile
+   max_size=50.0GB
+   hot_cache=0.0GB
+✅ DEBUG: PagedSSDCacheManager initialized successfully!
+
+================================================================================
+开始 cProfile 分析...
+================================================================================
+  完成第 1 次生成
+  完成第 2 次生成
+  完成第 3 次生成
+  完成第 4 次生成
+  完成第 5 次生成
+
+================================================================================
+cProfile 分析结果（按累计时间排序）
+================================================================================
+         66612 function calls (66576 primitive calls) in 0.158 seconds
 
    Ordered by: cumulative time
-   List reduced from 418 to 50 due to restriction <50>
+   List reduced from 422 to 50 due to restriction <50>
 
    ncalls  tottime  percall  cumtime  percall filename:lineno(function)
-    26/25    0.000    0.000    0.161    0.006 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:1966(_run_once)
+    26/25    0.000    0.000    0.162    0.006 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py:1966(_run_once)
        25    0.000    0.000    0.157    0.006 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/selectors.py:540(select)
     15/10    0.000    0.000    0.157    0.016 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/concurrent/futures/thread.py:81(run)
     15/10    0.000    0.000    0.157    0.016 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/concurrent/futures/thread.py:71(run)
-        5    0.000    0.000    0.151    0.030 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:3719(step)
+        5    0.000    0.000    0.151    0.030 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:3694(step)
         5    0.000    0.000    0.145    0.029 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py:1327(next)
-        5    0.050    0.010    0.145    0.029 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py:1234(_next)
-        5    0.055    0.011    0.063    0.013 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:326(_process_prompts)
-        5    0.000    0.000    0.022    0.004 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py:882(extract_cache)
-       50    0.022    0.000    0.022    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/cache.py:1013(extract)
+        5    0.049    0.010    0.145    0.029 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py:1234(_next)
+        5    0.056    0.011    0.064    0.013 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:326(_process_prompts)
+        5    0.000    0.000    0.021    0.004 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/generate.py:882(extract_cache)
+       50    0.021    0.000    0.021    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/cache.py:1013(extract)
        10    0.000    0.000    0.020    0.002 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:289(_step)
        10    0.000    0.000    0.020    0.002 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:367(__call__)
        10    0.000    0.000    0.020    0.002 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:280(__call__)
        10    0.000    0.000    0.020    0.002 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:247(__call__)
       400    0.001    0.000    0.019    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:221(__call__)
       300    0.003    0.000    0.009    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:132(__call__)
-      400    0.002    0.000    0.007    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:327(__call__)
-        5    0.000    0.000    0.005    0.001 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:2546(add_request)
+      400    0.003    0.000    0.007    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:327(__call__)
+        5    0.000    0.000    0.005    0.001 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:2521(add_request)
         5    0.000    0.000    0.005    0.001 /Users/lisihao/ThunderOMLX/src/omlx/cache/prefix_cache.py:1345(reconstruct_cache)
        60    0.000    0.000    0.004    0.000 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/events.py:92(_run)
        65    0.000    0.000    0.004    0.000 {method 'run' of '_contextvars.Context' objects}
-      300    0.001    0.000    0.003    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/gated_delta.py:260(gated_delta_update)
        10    0.000    0.000    0.003    0.000 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/selector_events.py:129(_read_from_self)
        20    0.001    0.000    0.003    0.000 {method 'recv' of '_socket.socket' objects}
+      300    0.001    0.000    0.003    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/gated_delta.py:260(gated_delta_update)
       400    0.001    0.000    0.003    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/switch_layers.py:176(__call__)
-      300    0.002    0.000    0.002    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/gated_delta.py:171(gated_delta_kernel)
+      300    0.003    0.000    0.003    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/gated_delta.py:171(gated_delta_kernel)
      3910    0.002    0.000    0.002    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx/nn/layers/quantized.py:242(__call__)
         5    0.000    0.000    0.002    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/paged_ssd_cache.py:1811(load_blocks_batch)
       100    0.001    0.000    0.002    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:121(__call__)
@@ -37,22 +58,29 @@
     10210    0.001    0.000    0.002    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx/nn/layers/base.py:99(__getattr__)
         5    0.000    0.000    0.002    0.000 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/concurrent/futures/thread.py:254(shutdown)
         5    0.000    0.000    0.002    0.000 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py:1097(join)
-        5    0.000    0.000    0.001    0.000 {method 'join' of '_thread._ThreadHandle' objects}
+        5    0.000    0.000    0.002    0.000 {method 'join' of '_thread._ThreadHandle' objects}
       400    0.001    0.000    0.001    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:168(__call__)
+        5    0.000    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:3157(_process_batch_responses)
         5    0.000    0.000    0.001    0.000 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py:1030(_bootstrap)
-        5    0.000    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:3182(_process_batch_responses)
         5    0.000    0.000    0.001    0.000 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py:1065(_bootstrap_inner)
     18210    0.001    0.000    0.001    0.000 {method 'get' of 'dict' objects}
        15    0.000    0.000    0.001    0.000 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/concurrent/futures/thread.py:199(submit)
-     1200    0.001    0.000    0.001    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/switch_layers.py:75(__call__)
        15    0.000    0.000    0.001    0.000 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/concurrent/futures/thread.py:219(_adjust_thread_count)
+     1200    0.001    0.000    0.001    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/switch_layers.py:75(__call__)
        11    0.000    0.000    0.001    0.000 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py:337(wait)
         5    0.000    0.000    0.001    0.000 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py:975(start)
         5    0.000    0.000    0.001    0.000 /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py:651(wait)
-        5    0.000    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:2361(_extract_cache_states)
+        5    0.000    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:2336(_extract_cache_states)
         5    0.001    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/paged_ssd_cache.py:1902(_load_one_block)
-        5    0.000    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:3414(_cleanup_finished)
+        5    0.000    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py:3389(_cleanup_finished)
         5    0.001    0.000    0.001    0.000 /Users/lisihao/ThunderOMLX/src/omlx/cache/paged_ssd_cache.py:2000(load_block_with_metadata)
       100    0.001    0.000    0.001    0.000 /opt/homebrew/lib/python3.14/site-packages/mlx_lm/models/cache.py:893(update_and_fetch)
 
 
+
+
+================================================================================
+分析结果已保存到: profiling/cprofile_output.txt
+================================================================================
+
+按自身时间排序的结果已保存到: profiling/cprofile_tottime.txt

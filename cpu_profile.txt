@@ -1,0 +1,38 @@
+         510565 function calls (507880 primitive calls) in 4.158 seconds
+
+   Ordered by: cumulative time
+   List reduced from 124 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.009    0.009    4.158    4.158 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/generate.py:745(generate)
+      129    0.002    0.000    4.149    0.032 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/generate.py:646(stream_generate)
+      129    0.000    0.000    4.042    0.031 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/generate.py:694(<genexpr>)
+      129    3.756    0.029    4.042    0.031 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/generate.py:303(generate_step)
+      130    0.000    0.000    0.283    0.002 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/generate.py:384(_model_call)
+      130    0.001    0.000    0.283    0.002 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:367(__call__)
+      129    0.002    0.000    0.283    0.002 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/generate.py:392(_step)
+      130    0.000    0.000    0.282    0.002 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:280(__call__)
+      130    0.003    0.000    0.281    0.002 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:247(__call__)
+     5200    0.012    0.000    0.276    0.000 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:221(__call__)
+     3900    0.046    0.000    0.122    0.000 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py:132(__call__)
+     5200    0.036    0.000    0.107    0.000 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:327(__call__)
+        1    0.000    0.000    0.095    0.095 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/tokenizer_utils.py:372(detokenizer)
+        1    0.008    0.008    0.095    0.095 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/tokenizer_utils.py:165(__init__)
+      134    0.000    0.000    0.087    0.001 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/tokenizer_utils.py:379(__getattr__)
+        6    0.000    0.000    0.087    0.015 {built-in method builtins.getattr}
+        2    0.000    0.000    0.087    0.044 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/transformers/tokenization_utils_tokenizers.py:573(vocab)
+        2    0.000    0.000    0.087    0.044 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/transformers/tokenization_utils_tokenizers.py:570(get_vocab)
+        2    0.087    0.044    0.087    0.044 {method 'get_vocab' of 'tokenizers.Tokenizer' objects}
+     3900    0.008    0.000    0.043    0.000 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/gated_delta.py:260(gated_delta_update)
+     5200    0.012    0.000    0.040    0.000 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/switch_layers.py:176(__call__)
+     3900    0.035    0.000    0.035    0.000 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/gated_delta.py:171(gated_delta_kernel)
+    50830    0.030    0.000    0.034    0.000 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx/nn/layers/quantized.py:265(__call__)
+     1300    0.010    0.000    0.026    0.000 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:121(__call__)
+   132083    0.015    0.000    0.026    0.000 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx/nn/layers/base.py:99(__getattr__)
+     5200    0.008    0.000    0.021    0.000 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:168(__call__)
+    15600    0.018    0.000    0.019    0.000 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/switch_layers.py:75(__call__)
+   199236    0.015    0.000    0.015    0.000 {method 'get' of 'dict' objects}
+     1300    0.007    0.000    0.007    0.000 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/cache.py:331(update_and_fetch)
+     3900    0.006    0.000    0.006    0.000 /Users/lisihao/ThunderOMLX/venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_next.py:71(__call__)
+
+

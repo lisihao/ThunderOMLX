@@ -1,0 +1,29 @@
+{
+  "fixes_applied": {
+    "A": "禁用异步预取",
+    "B": "MIN_TOKENS_FOR_CHUNKING=2560"
+  },
+  "test_results": {
+    "512": {
+      "success": true,
+      "latency": 19.14762306213379,
+      "error": null
+    },
+    "1024": {
+      "success": true,
+      "latency": 2.2044448852539062,
+      "error": null
+    },
+    "2048": {
+      "success": true,
+      "latency": 3.648837089538574,
+      "error": null
+    },
+    "3072": {
+      "success": true,
+      "latency": 3.7613210678100586,
+      "error": null
+    }
+  },
+  "all_passed": true
+}

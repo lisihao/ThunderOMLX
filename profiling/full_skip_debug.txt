@@ -1,0 +1,94 @@
+2026-03-15 00:35:50,244 - asyncio - DEBUG - Using selector: KqueueSelector
+The tokenizer you are loading from '/Users/lisihao/models/qwen3.5-35b-mlx' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+2026-03-15 00:35:53,103 - omlx.cache.type_registry - DEBUG - Registered handler for KVCache
+2026-03-15 00:35:53,103 - omlx.cache.type_registry - DEBUG - Registered handler for RotatingKVCache
+2026-03-15 00:35:53,103 - omlx.cache.type_registry - DEBUG - Registered handler for ArraysCache
+2026-03-15 00:35:53,103 - omlx.cache.type_registry - DEBUG - Registered handler for CacheList
+2026-03-15 00:35:53,107 - omlx.model_registry - DEBUG - Engine a474498d-8d9b-4ba7-8f96-d51435a8a22f acquired model 5166825920
+2026-03-15 00:35:53,107 - omlx.scheduler - INFO - Skipping block_size enlargement for ArraysCache (disable_block_size_enlargement=True). Current block_size=256 will be used for testing Skip Logic.
+2026-03-15 00:35:53,111 - omlx.cache.paged_cache - INFO - PagedCacheManager initialized: block_size=256, initial_blocks=64, max_blocks=512, max_tokens=131072, hash=xxHash64 (P0-3 Hybrid Hashing, 50x faster)
+2026-03-15 00:35:53,111 - omlx.cache.paged_ssd_cache - INFO - Scanning SSD cache directory: /Users/lisihao/.cache/omlx/profile_debug
+2026-03-15 00:35:53,112 - omlx.cache.paged_ssd_cache - INFO - SSD cache scan complete: scanned=1, indexed=1, errors=0, total_size=10.52 MB
+2026-03-15 00:35:53,112 - omlx.cache.paged_ssd_cache - INFO - PagedSSDCacheManager initialized: dir=/Users/lisihao/.cache/omlx/profile_debug, max_size=50.00 GB, existing_files=1
+2026-03-15 00:35:53,112 - omlx.cache.paged_ssd_cache - INFO - 🗜️ [P1] Compression: enabled (lz4, level=6)
+2026-03-15 00:35:53,112 - omlx.cache.access_tracker - INFO - AccessFrequencyTracker initialized: decay_interval=3600.0s
+2026-03-15 00:35:53,113 - omlx.cache.async_prefetcher - INFO - AsyncPrefetcher initialized: 4 workers, max queue size 100
+2026-03-15 00:35:53,113 - omlx.cache.async_prefetcher - INFO - AsyncPrefetcher started with 4 workers
+2026-03-15 00:35:53,113 - omlx.cache.paged_ssd_cache - DEBUG - Prefetch timer thread started
+2026-03-15 00:35:53,113 - omlx.cache.paged_ssd_cache - INFO - ✅ P1-5 Smart Prefetch enabled: top-50 blocks, interval 10.0s
+2026-03-15 00:35:53,113 - omlx.cache.paged_ssd_cache - INFO - ✅ P1-6 Checksum Validation enabled (xxh64, strict mode)
+2026-03-15 00:35:53,113 - omlx.cache.paged_cache - INFO - paged SSD cache manager connected to PagedCacheManager
+2026-03-15 00:35:53,113 - omlx.cache.prefix_cache - INFO - PagedSSDCacheManager connected to BlockAwarePrefixCache
+2026-03-15 00:35:53,113 - omlx.scheduler - INFO - paged SSD cache enabled: cache_dir=/Users/lisihao/.cache/omlx/profile_debug, max_size=50.00 GB, block_size=256 tokens
+2026-03-15 00:35:53,113 - omlx.scheduler - INFO - paged SSD cache enabled: /Users/lisihao/.cache/omlx/profile_debug, block_size=256, max_blocks=512
+2026-03-15 00:35:53,113 - omlx.scheduler - INFO - Loading tokenizer vocab (with disk cache)...
+2026-03-15 00:35:53,265 - omlx.scheduler - INFO - ✅ Vocab loaded from cache in 31.44 ms (size: 248077, cache: /Users/lisihao/.cache/omlx/vocab_cache/_Users_lisihao_models_qwen3.5-35b-mlx_vocab.pkl)
+2026-03-15 00:35:53,265 - omlx.engine_core - DEBUG - Engine a474498d-8d9b-4ba7-8f96-d51435a8a22f initialized
+2026-03-15 00:35:53,265 - omlx.engine_core - INFO - Engine started
+2026-03-15 00:35:53,266 - omlx.scheduler - DEBUG - Prompt Padding skipped: padding_needed=248 > max_padding_tokens=64
+2026-03-15 00:35:53,266 - omlx.cache.paged_cache - INFO - ✅ Partial block HIT: 8 tokens, hash=b'w\t\xfd\xcd\n\xcf\x87M\x00\x00\x00\x00\x00\x00\x00\x00'..., total_cached=8
+2026-03-15 00:35:53,266 - omlx.cache.prefix_cache - DEBUG - Cache hit for _skip_check: 1 blocks, 8 tokens
+2026-03-15 00:35:53,266 - omlx.cache.prefix_cache - INFO - ✨ FULL SKIP: 100% cache hit (8 tokens, 1 blocks)
+2026-03-15 00:35:53,266 - omlx.scheduler - INFO - Cache match result: can_skip=True, skip_reason=full, cache_hit_ratio=100.0%, remaining=0
+2026-03-15 00:35:53,266 - omlx.scheduler - INFO - ✨ FULL SKIP enabled for request e70049ee-9517-4824-9848-f4f63151d0af: 100% cache hit (8 tokens), skipping prefill computation
+2026-03-15 00:35:53,266 - omlx.cache.prefix_cache - INFO - 🔍 [Smart Prefetch Phase 1] Collected 1 blocks to load (total 1 blocks in table)
+2026-03-15 00:35:53,266 - omlx.cache.prefix_cache - INFO - ⚡ [Smart Prefetch Phase 2] Starting BATCH load of 1 blocks (hashes: ['7709fdcd']...)
+2026-03-15 00:35:53,266 - omlx.cache.paged_ssd_cache - INFO - ⚡ [Batch Load] Starting parallel load of 1 blocks from SSD (hot cache hits: 0/1)
+2026-03-15 00:35:53,267 - omlx.cache.paged_ssd_cache - DEBUG - Promoted block 7709fdcd COLD→HOT (accesses=2)
+2026-03-15 00:35:53,267 - omlx.cache.paged_ssd_cache - INFO - ⚡ [Batch Load] Completed in 0.4ms total (1/1 successful, 0.4ms/block average)
+2026-03-15 00:35:53,267 - omlx.cache.paged_ssd_cache - INFO - 📊 [Batch Load vs Sequential] Estimated sequential: 50ms, Actual parallel: 0.4ms, Speedup: 142.5x
+2026-03-15 00:35:53,267 - omlx.cache.prefix_cache - INFO - ⚡ [Smart Prefetch Phase 2] BATCH load completed in 0.5ms (1/1 successful)
+2026-03-15 00:35:53,267 - omlx.cache.paged_ssd_cache - DEBUG - Loaded block with metadata from SSD cache: 7709fdcd0acf874d...
+2026-03-15 00:35:53,267 - omlx.cache.prefix_cache - INFO - 📋 [Smart Prefetch Phase 3] Starting validation and reconstruction of 1 blocks
+2026-03-15 00:35:53,267 - omlx.cache.prefix_cache - DEBUG - Reconstructed cache from tiered cache: 40 layers, 8 tokens from 1 blocks
+2026-03-15 00:35:53,267 - omlx.scheduler - DEBUG - Request e70049ee-9517-4824-9848-f4f63151d0af: exact cache hit with stateful cache type, falling back to full prefill for deterministic kickoff
+2026-03-15 00:35:53,267 - omlx.scheduler - DEBUG - Request e70049ee-9517-4824-9848-f4f63151d0af: paged cache hit, 0 tokens in 0 blocks, 8 tokens remaining, cache reconstructed
+2026-03-15 00:35:53,267 - omlx.scheduler - DEBUG - Added request e70049ee-9517-4824-9848-f4f63151d0af with 8 prompt tokens
+2026-03-15 00:35:53,267 - omlx.scheduler - INFO - ✨ FULL SKIP: Request e70049ee-9517-4824-9848-f4f63151d0af ready for decode, 100% cache reuse (0 tokens), passing last token for generation kickoff
+2026-03-15 00:35:53,268 - omlx.scheduler - INFO - ✨ [Full Skip] UID 0 registered for skip prefill (request e70049ee-9517-4824-9848-f4f63151d0af, 0 cached tokens)
+2026-03-15 00:35:53,268 - omlx.scheduler - DEBUG - Scheduled request e70049ee-9517-4824-9848-f4f63151d0af (uid=0) with 1 tokens to process (8 total), no cache
+2026-03-15 00:35:53,268 - omlx.scheduler - DEBUG - ✨ [Full Skip Batch] All 1 UIDs have 100% cache hit, SKIPPING prefill computation entirely. UIDs: [0]
+2026-03-15 00:35:54,015 - omlx.scheduler - DEBUG - Extracted 40 layer states for request e70049ee-9517-4824-9848-f4f63151d0af
+2026-03-15 00:35:54,015 - omlx.scheduler - DEBUG - Request e70049ee-9517-4824-9848-f4f63151d0af finished: length, 1 tokens
+2026-03-15 00:35:54,015 - omlx.scheduler - INFO - Storing prompt-only cache: 8 tokens
+2026-03-15 00:35:54,015 - omlx.cache.prefix_cache - INFO - 📊 store_cache: existing_tokens=0, new_tokens=8, block_size=256, num_new_blocks=0
+2026-03-15 00:35:54,015 - omlx.cache.prefix_cache - INFO - 💾 Storing partial block: 8 tokens (after 0 full blocks)
+2026-03-15 00:35:54,015 - omlx.cache.prefix_cache - INFO - ♻️ Reusing existing partial block: hash=7709fdcd0acf874d..., tokens=8
+2026-03-15 00:35:54,015 - omlx.cache.prefix_cache - DEBUG - Stored cache for e70049ee-9517-4824-9848-f4f63151d0af: 1 blocks (0 saved to tiered cache), 8 tokens
+2026-03-15 00:35:54,015 - omlx.scheduler - INFO - ✅ Stored paged cache for request e70049ee-9517-4824-9848-f4f63151d0af (8 tokens stored, 9 total: 8 prompt + 1 output)
+2026-03-15 00:35:54,015 - omlx.scheduler - DEBUG - Released 1 blocks for eviction (request e70049ee-9517-4824-9848-f4f63151d0af)
+2026-03-15 00:35:54,015 - omlx.cache.prefix_cache - DEBUG - Cleared request entry for e70049ee-9517-4824-9848-f4f63151d0af (blocks retained)
+🔍 DEBUG: _init_tiered_cache called, HAS_TIERED_CACHE=True
+🔍 DEBUG: paged_ssd_cache_dir=/Users/lisihao/.cache/omlx/profile_debug
+✅ DEBUG: Initializing PagedSSDCacheManager...
+   cache_dir=/Users/lisihao/.cache/omlx/profile_debug
+   max_size=50.0GB
+   hot_cache=0.0GB
+✅ DEBUG: PagedSSDCacheManager initialized successfully!
+
+================================================================================
+🔍 调试信息：
+Paged SSD Cache Dir: /Users/lisihao/.cache/omlx/profile_debug
+Prompt: 请详细解释人工智能请详细解释人工智能... (长度: 18)
+================================================================================
+
+🔥 Warm-up 生成（建立初始缓存）
+Traceback (most recent call last):
+  File "/Users/lisihao/ThunderOMLX/test_full_skip_debug.py", line 118, in <module>
+    asyncio.run(debug_full_skip())
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/Users/lisihao/ThunderOMLX/test_full_skip_debug.py", line 61, in debug_full_skip
+    print(f"✅ Warm-up 完成，输出: {result.text[:50]}")
+                                    ^^^^^^^^^^^
+AttributeError: 'RequestOutput' object has no attribute 'text'
+2026-03-15 00:35:54,206 - omlx.model_registry - DEBUG - Engine a474498d-8d9b-4ba7-8f96-d51435a8a22f released model 5166825920
+2026-03-15 00:35:54,206 - omlx.engine_core - DEBUG - Engine a474498d-8d9b-4ba7-8f96-d51435a8a22f released model ownership

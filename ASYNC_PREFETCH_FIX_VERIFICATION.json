@@ -1,0 +1,27 @@
+{
+  "fix_applied": "Metal GPU operations moved to main thread",
+  "async_prefetch_enabled": true,
+  "test_results": {
+    "512": {
+      "success": true,
+      "latency": 12.67016315460205,
+      "error": null
+    },
+    "1024": {
+      "success": true,
+      "latency": 2.161868095397949,
+      "error": null
+    },
+    "2048": {
+      "success": true,
+      "latency": 3.643404006958008,
+      "error": null
+    },
+    "3072": {
+      "success": true,
+      "latency": 3.768205165863037,
+      "error": null
+    }
+  },
+  "all_passed": true
+}

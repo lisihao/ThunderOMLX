@@ -1,0 +1,115 @@
+{
+  "baseline": {
+    "短提示 (512 tokens)": {
+      "success": true,
+      "latency": 19.41215991973877,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "text": "测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试"
+    },
+    "中等提示 (1024 tokens)": {
+      "success": true,
+      "latency": 2.1188406944274902,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "text": "测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试"
+    },
+    "长提示 (2048 tokens)": {
+      "success": true,
+      "latency": 3.5487918853759766,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "text": "测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试"
+    }
+  },
+  "chunked": {
+    "短提示 (512 tokens)": {
+      "success": true,
+      "latency": 13.132783651351929,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "text": "测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试"
+    },
+    "中等提示 (1024 tokens)": {
+      "success": true,
+      "latency": 2.132951021194458,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 50,
+        "total_tokens": 50,
+        "input_tokens": 0,
+        "output_tokens": 50,
+        "cached_tokens": null,
+        "model_load_duration": null,
+        "time_to_first_token": null,
+        "total_time": null,
+        "prompt_eval_duration": null,
+        "generation_duration": null,
+        "prompt_tokens_per_second": null,
+        "generation_tokens_per_second": null
+      },
+      "text": "测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试 测试"
+    },
+    "长提示 (2048 tokens)": {
+      "success": false,
+      "error": "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
+      "latency": 3.1261188983917236
+    }
+  },
+  "config": {
+    "chunk_size": 512,
+    "min_tokens": 1024
+  }
+}

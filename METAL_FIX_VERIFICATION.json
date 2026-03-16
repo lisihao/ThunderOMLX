@@ -1,0 +1,21 @@
+{
+  "fix_applied": true,
+  "test_results": {
+    "512": {
+      "success": true,
+      "latency": 13.248966932296753,
+      "error": null
+    },
+    "1024": {
+      "success": true,
+      "latency": 2.1589109897613525,
+      "error": null
+    },
+    "2048": {
+      "success": false,
+      "latency": 1.0627100467681885,
+      "error": "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+    }
+  },
+  "all_passed": false
+}

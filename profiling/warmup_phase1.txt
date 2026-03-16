@@ -1,0 +1,27 @@
+The tokenizer you are loading from '/Users/lisihao/models/qwen3.5-35b-mlx' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+
+================================================================================
+🔥 第一步：Warm-up（建立缓存）
+================================================================================
+✅ 清空缓存目录: /Users/lisihao/.cache/omlx/profile
+🔍 DEBUG: _init_tiered_cache called, HAS_TIERED_CACHE=True
+🔍 DEBUG: paged_ssd_cache_dir=/Users/lisihao/.cache/omlx/profile
+✅ DEBUG: Initializing PagedSSDCacheManager...
+   cache_dir=/Users/lisihao/.cache/omlx/profile
+   max_size=50.0GB
+   hot_cache=0.0GB
+✅ DEBUG: PagedSSDCacheManager initialized successfully!
+
+📍 Warm-up 生成（prompt 长度: 18 字符）
+✅ Warm-up 完成
+
+⏳ 等待缓存写入到 SSD...
+
+📊 缓存文件检查:
+  - 缓存目录: /Users/lisihao/.cache/omlx/profile
+  - 文件数量: 1
+  - 7709fdcd0acf874d000000000000000000000000000000000000000000000000.safetensors.lz4: 31.46 MB
+
+================================================================================
+🏁 Warm-up 完成，缓存已写入
+================================================================================

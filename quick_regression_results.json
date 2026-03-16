@@ -1,0 +1,54 @@
+{
+  "timestamp": "2026-03-15 17:03:05",
+  "total_time_seconds": 0.09863495826721191,
+  "passed": 6,
+  "total": 6,
+  "pass_rate": 1.0,
+  "results": [
+    {
+      "test": "Hybrid Hashing",
+      "xxhash64_us": 7.3244170016550925,
+      "target_us": 10.0,
+      "pass": true
+    },
+    {
+      "test": "lz4 Compression",
+      "save_ms": 73.37633399947663,
+      "load_ms": 1.7292080010520294,
+      "target_ms": 50.0,
+      "pass": true
+    },
+    {
+      "test": "Batch Reconstruction",
+      "old_ms": 12.02000000193948,
+      "new_ms": 1.7955000002984889,
+      "speedup": 6.69451406290239,
+      "target_speedup": 4.5,
+      "pass": true
+    },
+    {
+      "test": "LRU-2 Cache",
+      "l2_hit_ms": 0.0003649999780463986,
+      "l2_hit_rate": 1.0,
+      "target_ms": 5.0,
+      "pass": true
+    },
+    {
+      "test": "ContextPilot",
+      "boundaries": [],
+      "num_refs": 2,
+      "extract_ms": 0.058290999731980264,
+      "target_ms": 1.0,
+      "pass": true
+    },
+    {
+      "test": "Skip Logic E2E",
+      "store_ms": 0.3281249992141966,
+      "second_ms": 0.10462499994901009,
+      "third_ms": 0.09445900286664255,
+      "full_skip": true,
+      "approx_skip": true,
+      "pass": true
+    }
+  ]
+}

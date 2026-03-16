@@ -1,0 +1,9 @@
+{
+  "total_prompt_tokens": 0,
+  "total_completion_tokens": 0,
+  "total_cached_tokens": 0,
+  "total_requests": 0,
+  "total_prefill_duration": 0.0,
+  "total_generation_duration": 0.0,
+  "per_model": {}
+}

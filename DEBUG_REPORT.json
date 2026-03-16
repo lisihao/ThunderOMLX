@@ -1,0 +1,20 @@
+{
+  "config": {
+    "chunked_enabled": true,
+    "chunk_size": 512,
+    "min_tokens": 1024
+  },
+  "breaking_point": 1024,
+  "results": {
+    "512": {
+      "success": true,
+      "latency": 13.473473072052002,
+      "error": null
+    },
+    "768": {
+      "success": true,
+      "latency": 1.8595659732818604,
+      "error": null
+    }
+  }
+}

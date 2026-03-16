@@ -1,0 +1,392 @@
+Timer unit: 1e-09 s
+
+Total time: 0.079418 s
+File: /Users/lisihao/ThunderOMLX/src/omlx/scheduler.py
+Function: _BoundarySnapshotBatchGenerator._process_prompts at line 326
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+   326                                               def _process_prompts(self, prompts):
+   327                                                   # Clear stale mRoPE position state from prior _process_prompts() call.
+   328                                                   # With prefill_batch_size=1, _next() calls _process_prompts() once per
+   329                                                   # prompt sequentially; the previous call's cached _position_ids would
+   330                                                   # cause shape mismatches for mRoPE models (e.g. Qwen3.5).
+   331         5       8000.0   1600.0      0.0          if hasattr(self.model, "clear_vlm_position_state"):
+   332                                                       self.model.clear_vlm_position_state()
+   333                                           
+   334         5       2000.0    400.0      0.0          (
+   335         5       2000.0    400.0      0.0              uids,
+   336         5          0.0      0.0      0.0              inputs,
+   337         5          0.0      0.0      0.0              max_tokens,
+   338         5       1000.0    200.0      0.0              caches,
+   339         5       1000.0    200.0      0.0              samplers,
+   340         5          0.0      0.0      0.0              logits_processors,
+   341         5       1000.0    200.0      0.0              prompt_checkpoints,
+   342         5       4000.0    800.0      0.0          ) = zip(*prompts)
+   343                                           
+   344                                                   # Full Skip: Detect when all UIDs have 100% cache hit
+   345                                                   # ⚡ NEW: Set flag to truly skip prefill computation
+   346         5       7000.0   1400.0      0.0          full_skip_mode = uids and all(uid in self._skip_prefill_uids for uid in uids)
+   347                                           
+   348         5          0.0      0.0      0.0          if full_skip_mode:
+   349        10       7000.0    700.0      0.0              logger.info(
+   350        10       3000.0    300.0      0.0                  f"✨ [Full Skip Batch] All {len(uids)} UIDs have 100% cache hit, "
+   351         5       4000.0    800.0      0.0                  f"SKIPPING prefill computation entirely. UIDs: {list(uids)}"
+   352                                                       )
+   353                                                       # Clean up processed UIDs (will be re-added if still full skip next time)
+   354        10       1000.0    100.0      0.0              for uid in uids:
+   355         5       3000.0    600.0      0.0                  self._skip_prefill_uids.discard(uid)
+   356                                           
+   357         5          0.0      0.0      0.0          lengths = [len(p) for p in inputs]
+   358         5       2000.0    400.0      0.0          max_length = max(lengths)
+   359         5       2000.0    400.0      0.0          padding = [max_length - l for l in lengths]
+   360                                           
+   361                                                   # Compute effective prompt checkpoint exactly as upstream BatchGenerator does.
+   362                                                   # When prompt_checkpoints are default (-1), this yields 1 — matching old behavior.
+   363        10       2000.0    200.0      0.0          prompt_checkpoints_offsets = [
+   364        10       3000.0    300.0      0.0              (l - pc if pc > 0 else -pc) for l, pc in zip(lengths, prompt_checkpoints)
+   365                                                   ]
+   366         5       1000.0    200.0      0.0          prompt_checkpoint = max(1, max(prompt_checkpoints_offsets))
+   367                                           
+   368                                                   # Collect per-UID VLM embeddings registered by _schedule_waiting().
+   369         5       3000.0    600.0      0.0          vlm_embeds_map: Dict[int, Tuple[mx.array, Dict[str, Any], int]] = {}
+   370        10          0.0      0.0      0.0          for uid in uids:
+   371         5       2000.0    400.0      0.0              if uid in self._vlm_pending:
+   372                                                           vlm_embeds_map[uid] = self._vlm_pending.pop(uid)
+   373                                           
+   374         5       4000.0    800.0      0.0          self._stats.prompt_tokens += sum(lengths)
+   375                                           
+   376         5      30000.0   6000.0      0.0          tokens = [mx.array(inp) for inp in inputs]
+   377         5       1000.0    200.0      0.0          processed_tokens = 0
+   378         5       7000.0   1400.0      0.0          boundary_enabled = self._boundary_capture_enabled()
+   379         5     392000.0  78400.0      0.5          base_sizes = self._cache_base_sizes(caches) if boundary_enabled else []
+   380         5       2000.0    400.0      0.0          target_boundaries: List[Optional[int]] = []
+   381                                                   # all_boundaries mode: stop at EVERY block boundary (not just last)
+   382                                                   # for hybrid models with non-sliceable caches (ArraysCache).
+   383                                                   # Determined after cache is created and checked.
+   384         5          0.0      0.0      0.0          all_boundaries = False
+   385         5       1000.0    200.0      0.0          if boundary_enabled:
+   386         5       2000.0    400.0      0.0              block_size = self._boundary_block_size
+   387        10       3000.0    300.0      0.0              for length, base in zip(lengths, base_sizes):
+   388         5          0.0      0.0      0.0                  full_total = base + max(length, 0)
+   389         5       2000.0    400.0      0.0                  if full_total <= 0:
+   390                                                               target_boundaries.append(None)
+   391                                                               continue
+   392                                           
+   393                                                           # Compute the last full boundary below the full prompt length.
+   394         5       2000.0    400.0      0.0                  target_boundary = (full_total // block_size) * block_size
+   395         5          0.0      0.0      0.0                  if target_boundary <= base:
+   396         5       2000.0    400.0      0.0                      target_boundaries.append(None)
+   397                                                           elif full_total % block_size == 0:
+   398                                                               # Prompt lands exactly on boundary. Still need a target
+   399                                                               # for all_boundaries mode to stop at intermediate ones.
+   400                                                               target_boundaries.append(target_boundary)
+   401                                                           else:
+   402                                                               target_boundaries.append(target_boundary)
+   403                                           
+   404         5       2000.0    400.0      0.0          emitted_boundaries: Dict[int, int] = {uid: -1 for uid in uids}
+   405                                           
+   406                                                   # VLM batched embeddings (built per-path, used in _step at the end).
+   407         5       1000.0    200.0      0.0          batched_embeds: Optional[mx.array] = None
+   408         5       1000.0    200.0      0.0          batched_extra: Optional[Dict[str, Any]] = None
+   409                                           
+   410                                                   # New prompts so
+   411                                                   #   1. Left-pad the inputs
+   412                                                   #   2. Process
+   413         5       9000.0   1800.0      0.0          if all(c[0].empty() for c in caches):
+   414         5      18000.0   3600.0      0.0              inputs = _left_pad_prompts(inputs, max_length=max_length)
+   415         5     610000.0 122000.0      0.8              prompt_cache = _make_cache(self.model, padding, self.max_kv_size)
+   416                                           
+   417                                                       # Build left-padded VLM embeddings batch (matching token padding).
+   418        10      12000.0   1200.0      0.0              batched_embeds, batched_extra = self._build_left_padded_vlm_batch(
+   419         5       1000.0    200.0      0.0                  vlm_embeds_map, list(uids), lengths, max_length
+   420                                                       )
+   421                                           
+   422                                                       # Disable boundary capture if all layers are sliceable (e.g.
+   423                                                       # pure BatchKVCache models).  This avoids unnecessary prefill
+   424                                                       # step-size limiting and expensive cache extraction.
+   425         5      13000.0   2600.0      0.0              if boundary_enabled and not self._prompt_cache_needs_snapshots(prompt_cache):
+   426                                                           boundary_enabled = False
+   427         5       2000.0    400.0      0.0              elif boundary_enabled:
+   428                                                           # Hybrid model: stop at every block boundary to capture
+   429                                                           # per-block ArraysCache snapshots.
+   430         5       1000.0    200.0      0.0                  all_boundaries = True
+   431                                           
+   432         5       3000.0    600.0      0.0              while inputs.shape[1] > prompt_checkpoint:
+   433                                                           max_allowed = inputs.shape[1] - prompt_checkpoint
+   434                                                           if boundary_enabled:
+   435                                                               n_to_process = self._next_boundary_limited_step(
+   436                                                                   processed_tokens,
+   437                                                                   lengths,
+   438                                                                   base_sizes,
+   439                                                                   max_allowed,
+   440                                                                   target_boundaries,
+   441                                                                   all_boundaries=all_boundaries,
+   442                                                               )
+   443                                                           else:
+   444                                                               n_to_process = min(self.prefill_step_size, max_allowed)
+   445                                           
+   446                                                           model_kwargs = {}
+   447                                                           if batched_embeds is not None:
+   448                                                               model_kwargs["inputs_embeds"] = batched_embeds[:, :n_to_process]
+   449                                                               if batched_extra:
+   450                                                                   model_kwargs["vlm_extra_kwargs"] = _slice_vlm_extra(
+   451                                                                       batched_extra, n_to_process
+   452                                                                   )
+   453                                                           self.model(inputs[:, :n_to_process], cache=prompt_cache, **model_kwargs)
+   454                                                           mx.eval([c.state for c in prompt_cache])
+   455                                                           inputs = inputs[:, n_to_process:]
+   456                                                           if batched_embeds is not None:
+   457                                                               batched_embeds = batched_embeds[:, n_to_process:]
+   458                                                               if batched_extra:
+   459                                                                   batched_extra = _advance_vlm_extra(batched_extra, n_to_process)
+   460                                                           processed_tokens += n_to_process
+   461                                                           self.prompt_progress_callback(
+   462                                                               [
+   463                                                                   (uid, processed_tokens, length)
+   464                                                                   for uid, length in zip(uids, lengths)
+   465                                                               ]
+   466                                                           )
+   467                                                           self._emit_boundary_snapshots(
+   468                                                               uids=list(uids),
+   469                                                               lengths=lengths,
+   470                                                               base_sizes=base_sizes,
+   471                                                               prompt_cache=prompt_cache,
+   472                                                               emitted=emitted_boundaries,
+   473                                                               processed_tokens=processed_tokens,
+   474                                                           )
+   475                                                           mx.clear_cache()
+   476                                           
+   477                                                           if self._memory_limit_bytes > 0:
+   478                                                               active = mx.get_active_memory()
+   479                                                               if (
+   480                                                                   self._memory_hard_limit_bytes > 0
+   481                                                                   and active > self._memory_hard_limit_bytes
+   482                                                               ):
+   483                                                                   logger.warning(
+   484                                                                       f"Prefill force-stopped at {processed_tokens} "
+   485                                                                       f"tokens: memory {active / 1024**3:.1f}GB "
+   486                                                                       f"exceeds hard limit "
+   487                                                                       f"{self._memory_hard_limit_bytes / 1024**3:.1f}GB"
+   488                                                                   )
+   489                                                                   raise RuntimeError(
+   490                                                                       "Memory limit exceeded during prefill"
+   491                                                                   )
+   492                                                               elif active > self._memory_limit_bytes:
+   493                                                                   logger.warning(
+   494                                                                       f"Prefill memory soft limit exceeded at "
+   495                                                                       f"{processed_tokens} tokens: "
+   496                                                                       f"{active / 1024**3:.1f}GB > "
+   497                                                                       f"{self._memory_limit_bytes / 1024**3:.1f}GB "
+   498                                                                       f"(hard limit: "
+   499                                                                       f"{self._memory_hard_limit_bytes / 1024**3:.1f}GB)"
+   500                                                                   )
+   501                                           
+   502                                                           # Check for pending aborts between prefill chunks.
+   503                                                           # GIL guarantees _pending_abort_ids.add() is atomic,
+   504                                                           # so reading from the executor thread is safe.
+   505                                                           if self._abort_check_callback is not None:
+   506                                                               abort_uids = self._abort_check_callback(list(uids))
+   507                                                               if abort_uids:
+   508                                                                   logger.info(
+   509                                                                       f"Prefill interrupted at {processed_tokens}/"
+   510                                                                       f"{max(lengths)} tokens: "
+   511                                                                       f"{len(abort_uids)} request(s) aborted"
+   512                                                                   )
+   513                                                                   raise _PrefillAbortedError(
+   514                                                                       abort_uids, processed_tokens
+   515                                                                   )
+   516                                           
+   517                                                   # Further prompt processing so we need to
+   518                                                   #   1. Merge the KV caches and prepare for right padded prompts
+   519                                                   #   2. Right pad the inputs
+   520                                                   #   2. Process
+   521                                                   #   3. Finalize the KV caches so they are left padded again
+   522                                                   else:
+   523                                                       last_inputs = mx.array([p[-prompt_checkpoint:] for p in inputs])
+   524                                                       inputs = _right_pad_prompts(inputs, max_length=max_length)
+   525                                                       prompt_cache = _merge_caches(caches)
+   526                                           
+   527                                                       # Build right-padded VLM embeddings batch (matching token padding).
+   528                                                       batched_embeds, batched_extra = self._build_right_padded_vlm_batch(
+   529                                                           vlm_embeds_map, list(uids), lengths, max_length
+   530                                                       )
+   531                                           
+   532                                                       # Disable boundary capture for sliceable-only caches.
+   533                                                       if boundary_enabled and not self._prompt_cache_needs_snapshots(prompt_cache):
+   534                                                           boundary_enabled = False
+   535                                                       elif boundary_enabled:
+   536                                                           # Hybrid model: stop at every block boundary.
+   537                                                           all_boundaries = True
+   538                                           
+   539                                                       for c in prompt_cache:
+   540                                                           # subtract prompt_checkpoint from lengths since we don't process
+   541                                                           # the last prompt_checkpoint tokens during prefill
+   542                                                           c.prepare(
+   543                                                               lengths=[max(0, l - prompt_checkpoint) for l in lengths],
+   544                                                               right_padding=padding,
+   545                                                           )
+   546                                           
+   547                                                       while inputs.shape[1] > prompt_checkpoint:
+   548                                                           # ⚡ FULL SKIP: Skip all prefill computation when 100% cache hit
+   549                                                           if full_skip_mode:
+   550                                                               logger.info(
+   551                                                                   f"✨ [Full Skip] Skipping prefill loop: 100% cache hit, "
+   552                                                                   f"inputs.shape={inputs.shape}, prompt_checkpoint={prompt_checkpoint}"
+   553                                                               )
+   554                                                               break
+   555                                           
+   556                                                           max_allowed = inputs.shape[1] - prompt_checkpoint
+   557                                                           if boundary_enabled:
+   558                                                               n_to_process = self._next_boundary_limited_step(
+   559                                                                   processed_tokens,
+   560                                                                   lengths,
+   561                                                                   base_sizes,
+   562                                                                   max_allowed,
+   563                                                                   target_boundaries,
+   564                                                                   all_boundaries=all_boundaries,
+   565                                                               )
+   566                                                           else:
+   567                                                               n_to_process = min(self.prefill_step_size, max_allowed)
+   568                                           
+   569                                                           model_kwargs = {}
+   570                                                           if batched_embeds is not None:
+   571                                                               model_kwargs["inputs_embeds"] = batched_embeds[:, :n_to_process]
+   572                                                               if batched_extra:
+   573                                                                   model_kwargs["vlm_extra_kwargs"] = _slice_vlm_extra(
+   574                                                                       batched_extra, n_to_process
+   575                                                                   )
+   576                                                           self.model(inputs[:, :n_to_process], cache=prompt_cache, **model_kwargs)
+   577                                                           mx.eval([c.state for c in prompt_cache])
+   578                                                           inputs = inputs[:, n_to_process:]
+   579                                                           if batched_embeds is not None:
+   580                                                               batched_embeds = batched_embeds[:, n_to_process:]
+   581                                                               if batched_extra:
+   582                                                                   batched_extra = _advance_vlm_extra(batched_extra, n_to_process)
+   583                                                           processed_tokens += n_to_process
+   584                                                           self.prompt_progress_callback(
+   585                                                               [
+   586                                                                   (uid, processed_tokens, length)
+   587                                                                   for uid, length in zip(uids, lengths)
+   588                                                               ]
+   589                                                           )
+   590                                                           self._emit_boundary_snapshots(
+   591                                                               uids=list(uids),
+   592                                                               lengths=lengths,
+   593                                                               base_sizes=base_sizes,
+   594                                                               prompt_cache=prompt_cache,
+   595                                                               emitted=emitted_boundaries,
+   596                                                               processed_tokens=processed_tokens,
+   597                                                           )
+   598                                                           mx.clear_cache()
+   599                                           
+   600                                                           if self._memory_limit_bytes > 0:
+   601                                                               active = mx.get_active_memory()
+   602                                                               if (
+   603                                                                   self._memory_hard_limit_bytes > 0
+   604                                                                   and active > self._memory_hard_limit_bytes
+   605                                                               ):
+   606                                                                   logger.warning(
+   607                                                                       f"Prefill force-stopped at {processed_tokens} "
+   608                                                                       f"tokens: memory {active / 1024**3:.1f}GB "
+   609                                                                       f"exceeds hard limit "
+   610                                                                       f"{self._memory_hard_limit_bytes / 1024**3:.1f}GB"
+   611                                                                   )
+   612                                                                   raise RuntimeError(
+   613                                                                       "Memory limit exceeded during prefill"
+   614                                                                   )
+   615                                                               elif active > self._memory_limit_bytes:
+   616                                                                   logger.warning(
+   617                                                                       f"Prefill memory soft limit exceeded at "
+   618                                                                       f"{processed_tokens} tokens: "
+   619                                                                       f"{active / 1024**3:.1f}GB > "
+   620                                                                       f"{self._memory_limit_bytes / 1024**3:.1f}GB "
+   621                                                                       f"(hard limit: "
+   622                                                                       f"{self._memory_hard_limit_bytes / 1024**3:.1f}GB)"
+   623                                                                   )
+   624                                           
+   625                                                           # Check for pending aborts between prefill chunks.
+   626                                                           if self._abort_check_callback is not None:
+   627                                                               abort_uids = self._abort_check_callback(list(uids))
+   628                                                               if abort_uids:
+   629                                                                   logger.info(
+   630                                                                       f"Prefill interrupted at {processed_tokens}/"
+   631                                                                       f"{max(lengths)} tokens: "
+   632                                                                       f"{len(abort_uids)} request(s) aborted"
+   633                                                                   )
+   634                                                                   raise _PrefillAbortedError(
+   635                                                                       abort_uids, processed_tokens
+   636                                                                   )
+   637                                           
+   638                                                       mx.eval([c.state for c in prompt_cache])
+   639                                                       inputs = last_inputs
+   640                                           
+   641       205      30000.0    146.3      0.0          for c in prompt_cache:
+   642       200     119000.0    595.0      0.1              c.finalize()
+   643                                           
+   644                                                   # Emit prompt checkpoint callback for upstream parity.
+   645                                                   # When prompt_checkpoint > 1, process remaining tokens before _step.
+   646         5       1000.0    200.0      0.0          if self.prompt_checkpoint_callback is not None:
+   647                                                       self.prompt_checkpoint_callback(
+   648                                                           [
+   649                                                               (uid, prompt_checkpoint, tuple(c.extract(i) for c in prompt_cache))
+   650                                                               for i, uid in enumerate(uids)
+   651                                                           ]
+   652                                                       )
+   653         5       2000.0    400.0      0.0          if prompt_checkpoint > 1 and not full_skip_mode:
+   654                                                       # ⚡ FULL SKIP: Skip checkpoint processing when 100% cache hit
+   655                                                       model_kwargs_cp = {}
+   656                                                       if batched_embeds is not None and batched_embeds.shape[1] >= (prompt_checkpoint - 1):
+   657                                                           # Slice VLM embeds for the checkpoint-to-last-1 range
+   658                                                           model_kwargs_cp["inputs_embeds"] = batched_embeds[:, :prompt_checkpoint - 1]
+   659                                                           if batched_extra:
+   660                                                               model_kwargs_cp["vlm_extra_kwargs"] = _slice_vlm_extra(
+   661                                                                   batched_extra, prompt_checkpoint - 1
+   662                                                               )
+   663                                                       self.model(inputs[:, :prompt_checkpoint - 1], cache=prompt_cache, **model_kwargs_cp)
+   664                                                       mx.eval([c.state for c in prompt_cache])
+   665                                                       inputs = inputs[:, prompt_checkpoint - 1:]
+   666                                                       if batched_embeds is not None:
+   667                                                           batched_embeds = batched_embeds[:, prompt_checkpoint - 1:]
+   668                                                           if batched_extra:
+   669                                                               batched_extra = _advance_vlm_extra(batched_extra, prompt_checkpoint - 1)
+   670                                           
+   671         5    3621000.0 724200.0      4.6          mx.clear_cache()
+   672                                           
+   673                                                   # Pass remaining VLM embeddings (last token) to _step if available.
+   674         5       2000.0    400.0      0.0          step_kwargs: Dict[str, Any] = {}
+   675         5       1000.0    200.0      0.0          if batched_embeds is not None and batched_embeds.shape[1] > 0:
+   676                                                       step_kwargs["inputs_embeds"] = batched_embeds
+   677                                                       if batched_extra:
+   678                                                           step_kwargs["vlm_extra_kwargs"] = batched_extra
+   679        15   18593000.0 1.24e+06     23.4          y, logprobs = self._step(
+   680         5          0.0      0.0      0.0              inputs, prompt_cache, samplers, logits_processors, tokens,
+   681         5       1000.0    200.0      0.0              **step_kwargs,
+   682                                                   )
+   683                                           
+   684                                                   # Skip boundary snapshots in FULL SKIP mode - no new prefill computation
+   685                                                   # so no need to emit boundary tracking (saves ~2-3ms)
+   686         5       2000.0    400.0      0.0          if not full_skip_mode:
+   687                                                       self._emit_boundary_snapshots(
+   688                                                           uids=list(uids),
+   689                                                           lengths=lengths,
+   690                                                           base_sizes=base_sizes,
+   691                                                           prompt_cache=prompt_cache,
+   692                                                           emitted=emitted_boundaries,
+   693                                                           use_full_prompt_lengths=True,
+   694                                                       )
+   695                                           
+   696         5   55791000.0 1.12e+07     70.2          mx.async_eval(y, logprobs)
+   697                                           
+   698        10      38000.0   3800.0      0.0          return MLXBatch(
+   699         5       9000.0   1800.0      0.0              list(uids),
+   700         5       3000.0    600.0      0.0              y,
+   701         5       1000.0    200.0      0.0              logprobs,
+   702         5       3000.0    600.0      0.0              list(max_tokens),
+   703         5      13000.0   2600.0      0.0              [0] * len(uids),
+   704         5       1000.0    200.0      0.0              prompt_cache,
+   705         5       2000.0    400.0      0.0              list(samplers),
+   706         5       4000.0    800.0      0.0              list(logits_processors),
+   707         5       1000.0    200.0      0.0              tokens,
+   708                                                   )
+

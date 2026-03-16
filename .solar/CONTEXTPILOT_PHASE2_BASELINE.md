@@ -1,0 +1,150 @@
+# ContextPilot Phase 2 性能基线报告
+
+**日期**: 2026-03-15
+**模型**: qwen3.5-35b-mlx (Qwen3.5-35B-A3B-4bit, MLX)
+**服务器**: ThunderOMLX (omlx serve, port 8000)
+**缓存**: Paged SSD Cache + Hot Cache + Skip Logic
+
+---
+
+## 测试场景
+
+### Test 1: 多轮对话 (Multi-Turn Dialog)
+
+- **配置**: 相同 system prompt（~140 tokens），不同 user query
+- **请求数**: 20 (2 rounds × 10 queries)
+- **max_tokens**: 30
+
+### Test 2: OpenClaw Workload (Real Agent Scenario)
+
+- **配置**: 5 种 agent（coder, researcher, analyst, pm, tester），各有固定 system prompt
+- **请求数**: 20（基于 openclaw-workload-7d.jsonl 分布采样）
+- **分布**: researcher 8, coder 7, analyst 3, pm 2
+
+---
+
+## 核心指标
+
+### TTFT (Time To First Token)
+
+| 场景 | Cold (1st) | Warm (avg) | Speedup |
+|------|-----------|-----------|---------|
+| Multi-Turn Dialog | 1018 ms | 372 ms (R2) | **2.7x** |
+| OpenClaw Workload | 996 ms | 527 ms (all) | **1.9x** |
+
+**分轮统计 (Multi-Turn)**:
+- Round 1 (cold): avg 627 ms (首次 1018ms 含模型预热)
+- Round 2 (warm): avg 372 ms ← **cache 完全命中**
+
+**Per-Agent TTFT (OpenClaw)**:
+| Agent | 首次 TTFT | 缓存命中 TTFT | Speedup |
+|-------|----------|-------------|---------|
+| researcher | ~630 ms | ~372 ms | **1.7x** |
+| coder | ~615 ms | ~374 ms | **1.6x** |
+| analyst | ~586 ms | ~586 ms | 1.0x (无缓存) |
+| pm | ~537 ms | N/A | N/A |
+
+### Cache Hit Rate (从服务器日志)
+
+| 场景 | 总请求 | Full Skip | Skip Rate |
+|------|--------|-----------|-----------|
+| Multi-Turn R2 | 10 | 10 | **100%** |
+| OpenClaw | 20 | 6 | **30%** |
+
+**OpenClaw 缓存未命中原因**:
+- analyst (3 requests): prompt 83-112 tokens < block_size 256 → 无法创建 block
+- pm (2 requests): prompt 83-86 tokens < block_size 256 → 无法创建 block
+- coder/researcher 首次请求: 无缓存可用（cold miss）
+
+### ContextPilot Adapter
+
+| 指标 | 值 | 备注 |
+|------|-----|------|
+| Context refs/request | 2.0 | system + user 两个 block |
+| message_boundaries | [] | Phase 2 尚未计算 token 边界 |
+| Unique blocks indexed | 0* | Adapter 未集成到请求路径 |
+
+*注：ContextPilot adapter 目前是独立调用，未集成到服务器请求路径中。
+缓存命中依赖 ThunderOMLX 内置的 prefix cache (paged_cache + paged_ssd_cache)。
+
+---
+
+## 发现 & 问题
+
+### 已确认正常工作
+
+1. **Skip Logic**: Full Skip 在 100% 命中时正确触发
+2. **SSD 缓存**: lz4 解压 ~10ms，从 SSD 加载 block ~16ms
+3. **Hot Cache Promotion**: 第 2 次访问触发 COLD→HOT 晋升
+4. **Block 级缓存**: 相同 agent 连续请求触发缓存复用
+
+### 待修复问题
+
+1. **`cached_tokens` API 字段始终为 0**
+   - 根因: scheduler.py 中 `request.cached_tokens = 0` 在 "deterministic kickoff" fallback 中被重置
+   - 影响: 客户端无法知道缓存是否命中
+   - 优先级: P1（Phase 3 必须修复）
+
+2. **短 prompt 无法缓存 (block_size=256 > prompt_tokens)**
+   - 影响: analyst (~108 tokens), pm (~85 tokens) 永远不会创建 block
+   - 方案: 使用方案 2 的动态 block_size（已实现但默认 256）
+   - 优先级: P2
+
+3. **ContextPilot adapter 未集成到请求路径**
+   - 当前: adapter 独立调用，不影响实际缓存
+   - 需要: 将 adapter 集成到 server.py 的 chat completions handler
+   - 优先级: P1（Phase 3 核心任务）
+
+4. **TPS 报告为 0**
+   - 根因: max_tokens=30 时 streaming 中 generation 很短，TTFT 和 end 时间差太小
+   - 影响: 无法准确测量生成速度
+   - 修复: 增大 max_tokens 或使用非 streaming 方式
+
+---
+
+## 性能基线汇总
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ContextPilot Phase 2 Performance Baseline                     │
+│  Date: 2026-03-15 | Model: qwen3.5-35b-mlx                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  TTFT (Multi-Turn, same system prompt):                         │
+│    Cold:    627 ms (Round 1 avg)                                │
+│    Warm:    372 ms (Round 2 avg, 100% cache hit)                │
+│    Speedup: 1.7x                                                │
+│                                                                 │
+│  TTFT (OpenClaw, mixed agents):                                 │
+│    Cold:    996 ms (first request, incl. model warmup)          │
+│    Warm:    527 ms (overall avg)                                 │
+│    Cache hit requests: 6/20 = 30%                               │
+│                                                                 │
+│  Cache System:                                                  │
+│    Block size: 256 tokens                                       │
+│    SSD load: ~16ms/block (lz4)                                  │
+│    Skip Logic: FULL SKIP on 100% hit                            │
+│    Limitation: prompt < 256 tokens → no cache                   │
+│                                                                 │
+│  ContextPilot Adapter:                                          │
+│    Status: Implemented but not integrated into request path     │
+│    message_boundaries: Not yet computed (Phase 3 task)          │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Phase 3 优化方向
+
+基于此基线数据，Phase 3 应重点解决：
+
+1. **集成 ContextPilot adapter 到请求路径** — 使 message_boundaries 生效
+2. **修复 cached_tokens 上报** — 让客户端能感知缓存状态
+3. **降低 block_size 或动态调整** — 让短 prompt agent 也能受益
+4. **Message-level cache key** — 基于 message_boundaries 做更细粒度的缓存
+
+---
+
+*Report generated by: benchmark_phase2_baseline.py*
+*Raw data: benchmark_phase2_baseline_results.json*

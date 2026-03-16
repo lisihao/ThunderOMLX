@@ -1,0 +1,71 @@
+--- a/src/omlx/scheduler.py
++++ b/src/omlx/scheduler.py
+@@ -14,6 +14,7 @@ import copy
+ import gc
+ import logging
+ import threading
+ import time
+ from collections import deque
+ from dataclasses import dataclass, field
+@@ -3824,6 +3825,10 @@ class Scheduler:
+             return self._do_abort_request(request_id)
+         return False
+
++    # Performance profiling counters
++    _perf_batch_gen_times = []
++    _perf_step_times = []
++
+     def step(self) -> SchedulerOutput:
+         """
+         Execute one scheduling step with automatic error recovery.
+@@ -3838,7 +3843,10 @@ class Scheduler:
+         Returns:
+             SchedulerOutput with results of this step
+         """
++        step_start = time.perf_counter()
+         output = SchedulerOutput()
+
+         # Process pending aborts FIRST (thread-safe with hybrid executor)
+@@ -3854,9 +3862,15 @@ class Scheduler:
+             output.num_scheduled_tokens = sum(r.num_prompt_tokens for r in scheduled)
+
+             # Run generation step if we have running requests
+             if self.batch_generator is not None and self.running:
++                # ⏱️ Profile batch_generator.next()
++                gen_start = time.perf_counter()
+                 responses = self.batch_generator.next()
++                gen_time = (time.perf_counter() - gen_start) * 1000
++                self._perf_batch_gen_times.append(gen_time)
++
+                 output.has_work = True
+
+                 if responses:
+@@ -3933,6 +3947,28 @@ class Scheduler:
+         ):
+             gc.collect()
+
++        # ⏱️ Record step time
++        step_time = (time.perf_counter() - step_start) * 1000
++        self._perf_step_times.append(step_time)
++
++        # 📊 Print performance stats every 50 steps (only during generation phase)
++        if len(self._perf_step_times) > 0 and len(self._perf_step_times) % 50 == 0:
++            if self._perf_batch_gen_times:
++                avg_gen = sum(self._perf_batch_gen_times) / len(self._perf_batch_gen_times)
++                avg_step = sum(self._perf_step_times) / len(self._perf_step_times)
++                gen_pct = (avg_gen / avg_step * 100) if avg_step > 0 else 0
++
++                logger.info(
++                    f"⏱️  Perf [{len(self._perf_step_times)} steps]: "
++                    f"step={avg_step:.2f}ms/tok, "
++                    f"batch_gen={avg_gen:.2f}ms ({gen_pct:.1f}%), "
++                    f"TPS={1000/avg_step:.1f}"
++                )
++
++                # Reset counters to track recent performance
++                self._perf_batch_gen_times = []
++                self._perf_step_times = []
++
+         return output
+
+     def get_request(self, request_id: str) -> Optional[Request]:

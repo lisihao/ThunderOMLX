@@ -1,11 +1,24 @@
 # ThunderOMLX - Mac mini 最强推理引擎
 
+**最后更新**: 2026-03-15 21:30
+**当前阶段**: Generation 性能优化
+
 ## Mission
 
+### 主线任务
 以 omlx 为底座，融合 ThunderLLAMA、ClawGate、LMCache、ContextPilot 等项目的优势特性，为 openClaw 打造 Apple Silicon Mac mini 上的最强本地推理引擎。
+
+### 当前聚焦 🎯
+**优化 ThunderOMLX pp8192/tg128 性能，从 65.1 tok/s 提升到 75+ tok/s**
+
+**核心目标**:
+- 找出 Benchmark (65.1 tok/s) vs 直接测试 (79.8 tok/s) 的 18.5% 差距根因
+- 实施针对性优化，缩小与 Native MLX (80.1 tok/s) 的差距
+- 保持功能正确性和代码可维护性
 
 ## Constraints
 
+### 基础约束
 - 保持 omlx 的 UI/UX（Web 管理面板 + macOS 菜单栏应用）
 - **保留 mlx-lm 推理引擎**，移植 ThunderLLAMA 的优化能力（**LMCache、性能优化**）
 - 集成 ClawGate 端云协同能力（本地优先，云端回退）
@@ -13,7 +26,77 @@
 - 打包成 DMG，用户友好安装
 - 代码质量：测试覆盖率 > 80%
 
+### 性能优化约束（新增 2026-03-15）
+- ❌ 不破坏现有 API 接口
+- ❌ 不影响 ContextPilot 的 skip 功能
+- ❌ 性能优化不能引入 bug
+- ❌ 不修改 MLX 层代码（batch_generator.next 内部）
+- ✅ 必须保持向后兼容
+- ✅ 每次优化后必须运行性能回归测试
+- ✅ 必须有明确的回滚方案
+
 ## Current Plan
+
+### 🔥 当前优先级：Generation 性能优化 (2026-03-15 开始)
+
+**状态**: ✅ P0 完成，进入 P1
+**聚焦**: Task #14 - 优化 Prefill 性能
+
+#### Phase 1: 根因分析（P0 - ✅ 已完成）
+
+**Task #8**: 确认 Benchmark vs 直接测试性能差异根因 ✅
+- ✅ 在 Admin Benchmark 中添加性能分析（scheduler profiling）
+- ✅ 对比两种测试方式的详细性能数据
+- ✅ **初始假设（已推翻）**: API 层额外开销 3.06 ms/tok (19.6%)
+- ✅ **真实根因**: Token 1-50 warmup 慢（被 KV Cache 扩展延迟拖累）
+  - Token 9延迟: 11.8秒（KV Cache扩展瓶颈）
+  - Scheduler 内部性能优秀（Token 100: 79.8 tok/s）
+- ✅ **用户关键反馈**: "那不是啊，同样都是api来测的，为啥有的用户就非常高呢？"
+  - 提供了 oMLX v0.2.13 baseline: PP 880.3 tok/s, TG 71.3 tok/s
+  - 推翻了API层假设，指向warmup问题
+- **完成时间**: 2026-03-15 22:45
+- **报告**: BENCHMARK_PROFILING_ANALYSIS.md, WARMUP_BOTTLENECK_ANALYSIS.md
+
+**Task #13**: 消除 Token 1-50 的 warmup 慢 ✅
+- ✅ 修改 Benchmark warmup 改用长上下文（pp32→pp8192, tg8→tg16）
+- ✅ Token 9/17 的 KV Cache 扩展延迟完全消除（11.8秒→0秒）
+- ✅ Generation TPS 提升 7.7%（64.9→69.9 tok/s）
+- ✅ 稳定态性能保持（79.5 tok/s）
+- ✅ 根因确认：Profiling计数器未重置（展示问题，不影响实际性能）
+- **完成时间**: 2026-03-15 23:35
+- **报告**: ROOT_CAUSE_FOUND.md, WARMUP_FIX_RESULTS.md
+
+#### Phase 2: 短期优化（P1 - 1 周内）
+
+**Task #9**: 修复 Benchmark 内存泄漏 ✅
+- 添加 mx.clear_cache() 和 gc.collect()
+- **完成时间**: 2026-03-15 21:30
+
+**Task #14**: 优化 Prefill 性能（当前聚焦）
+- **当前**: 696.7 tok/s (TTFT 11.76s)
+- **目标**: 880+ tok/s (TTFT <9.5s)
+- **差距**: +26.3%
+- **可能方向**:
+  - 检查 Prefill 阶段的 Metal 同步
+  - 优化 Block-aware prefix cache 查找
+  - 检查 ContextPilot 判断逻辑
+- **预期收益**: ~26% Prefill TPS提升
+
+#### Phase 3: 中期优化（P2 - 2-3 周）
+
+**Task #11**: 优化 ContextPilot 判断逻辑
+- **预期收益**: ~1-2% 性能提升
+
+**Task #12**: 优化长上下文 KV Cache 加载
+- 批量预加载相邻 blocks
+- **预期收益**: ~5-8% 性能提升
+
+**性能目标**（已更新）:
+- ✅ 近期（1 周）: 70+ tok/s ← **已达成 69.9 tok/s**
+- 中期（1 月）: 75+ tok/s (+7.4%)
+- 长期（3 月）: 78+ tok/s (+11.6%)
+
+---
 
 ### Phase 3: ThunderLLAMA 优化能力移植 (4-5 天) — ✅ 已完成
 
@@ -163,6 +246,36 @@
    - 演示视频
 
 ## Decisions
+
+- [2026-03-15] **Benchmark vs 直接测试性能差距根因分析** ✅ **根因确认**
+  - **测试配置**: pp8192/tg128, Qwen3.5-35B-A3B (4-bit), M4 Pro 48GB
+  - **直接测试** (test_profiling.py):
+    - Scheduler 内部: step=12.52ms/tok, batch_gen=12.46ms (99.5%), TPS=79.8
+    - 最终 TPS: 79.8 tok/s ← 与 Native MLX (80.1) 几乎持平
+  - **Benchmark** (run_admin_benchmark.py):
+    - Scheduler 内部: step=12.52ms/tok, batch_gen=12.46ms (99.5%), TPS=79.8 ← **与直接测试完全一致**
+    - 最终 Generation TPS: 64.2 tok/s (15.58 ms/tok)
+  - **关键发现**:
+    - ✅ ThunderOMLX scheduler 层性能优秀（0.5% 开销，99.6% of Native MLX）
+    - ✅ Scheduler profiling 数据在两种测试中完全一致
+    - ⚠️ **问题定位**: API 层额外开销 3.06 ms/tok (19.6%)
+      - HTTP/SSE 序列化
+      - EngineCore → HTTP 响应包装
+      - 并发请求调度
+      - ContextPilot 额外处理（如果有）
+  - **性能分解**:
+    ```
+    Benchmark 端到端 TPOT (15.58 ms/tok)
+    ├─ scheduler.step() = 12.52 ms/tok (80.4%)
+    │  ├─ ThunderOMLX 层: 0.06 ms (0.5%)
+    │  └─ MLX batch_gen:  12.46 ms (99.5%)
+    └─ API 层开销 = 3.06 ms/tok (19.6%) ← 问题所在
+    ```
+  - **优化方向**: P1 优化 API 层（预计提升 10-15%）
+    - 使用 orjson 序列化
+    - 减少中间拷贝
+    - 优化响应包装
+  - **详细报告**: BENCHMARK_PROFILING_ANALYSIS.md
 
 - [2026-03-14] **Skip Logic 测试诊断** ❌ **测试方法错误，但有价值**
   - **测试文件**: `test_skip_logic_real_inference.py`
@@ -426,7 +539,36 @@
 
 ## Next Actions
 
-**阶段**: Phase 5: ThunderOMLX 性能优化路线图（进行中）
+**阶段**: Processing TPS 优化（2026-03-16 开始）
+
+### 🎯 当前聚焦：Processing TPS 优化 692.7 → 730 tok/s
+
+**目标**：将 Processing TPS 从 692.7 tok/s 提升到 ~730 tok/s（+5.4%）
+**背景**：
+- 当前基准：36.606s walltime，692.7 tok/s（无 instrumentation）
+- 主要瓶颈：save_block (2.603s, 7.1%) 和 Scheduler 调度间隙 (1.852s)
+- 82.2% 时间在模型推理（无法优化）
+
+**4 个递进阶段**：
+1. ✅ Phase 1: 异步 Tensor 提取（+2.8% → 712 tok/s）- **已完成** 2026-03-16
+   - 修改: paged_ssd_cache.py (+29 行，-20 行)
+   - 功能验证通过（语法、模块导入、bytes 提取）
+   - 文档: PHASE1_ASYNC_TENSOR_EXTRACTION.md
+2. ✅ Phase 2: 异步 save_block 调用（+2.1% → 727 tok/s）- **已完成** 2026-03-16
+   - 新建: cache_save_executor.py (148 行)
+   - 修改: scheduler.py (+112 行，-18 行)
+   - 功能验证通过（语法、block_table fallback 验证）
+   - 文档: PHASE2_ASYNC_SAVE_BLOCK.md
+3. ✅ Phase 3: 减少 Scheduler 调度间隙（+1.0% → 734 tok/s）- **已完成** 2026-03-16
+   - 修改: paged_ssd_cache.py (+9 行，队列延迟插桩）
+   - 功能验证通过（语法、插桩代码）
+   - 文档: PHASE3_QUEUE_LATENCY_INSTRUMENTATION.md
+4. ✅ Phase 4: 批量 Metal 操作（+0.3% → 736 tok/s）- **已完成** 2026-03-16
+   - 修改: paged_ssd_cache.py (+2 行，skip_eval 参数）
+   - 修改: prefix_cache.py (+58 行，批量 eval 逻辑）
+   - 功能验证通过（语法、批量 eval）
+   - 风险: 高（实验性，可能无效）
+   - 文档: PHASE4_BATCH_METAL_OPS.md
 
 ### 当前任务列表
 

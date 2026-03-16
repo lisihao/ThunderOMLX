@@ -1,0 +1,58 @@
+         1323529 function calls (1323110 primitive calls) in 24.530 seconds
+
+   Ordered by: internal time
+   List reduced from 451 to 50 due to restriction <50>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+    42446   24.078    0.001   24.118    0.001 {method 'control' of 'select.kqueue' objects}
+42448/42446    0.079    0.000   87.615    0.002 base_events.py:1966(_run_once)
+    400/4    0.032    0.000    0.000    0.000 {method 'acquire' of '_thread.lock' objects}
+    42453    0.024    0.000    0.104    0.000 tasks.py:687(sleep)
+42447/42446    0.022    0.000   48.125    0.001 selectors.py:540(select)
+      640    0.021    0.000    0.021    0.000 paged_ssd_cache.py:162(_restore_tensor_from_bytes)
+    42484    0.017    0.000    0.021    0.000 events.py:41(__init__)
+    21232    0.016    0.000    0.125    0.000 engine_core.py:158(_engine_loop)
+    42494    0.013    0.000    0.265    0.000 events.py:92(_run)
+    21222    0.013    0.000    0.035    0.000 base_events.py:799(call_at)
+    84886    0.012    0.000    0.018    0.000 base_events.py:766(time)
+    21222    0.012    0.000    0.051    0.000 base_events.py:775(call_later)
+    42494    0.011    0.000    0.246    0.000 {method 'run' of '_contextvars.Context' objects}
+    21222    0.011    0.000    0.018    0.000 events.py:190(cancel)
+    21252    0.010    0.000    0.020    0.000 base_events.py:846(_call_soon)
+       50    0.009    0.000    0.009    0.000 cache.py:1013(extract)
+    21252    0.008    0.000    0.029    0.000 base_events.py:817(call_soon)
+    21237    0.008    0.000    0.009    0.000 base_events.py:457(create_future)
+    21222    0.007    0.000    0.044    0.000 futures.py:319(_set_result_unless_cancelled)
+    21222    0.007    0.000    0.019    0.000 events.py:146(__init__)
+    21237    0.006    0.000    0.035    0.000 {method 'set_result' of '_asyncio.Future' objects}
+       80    0.006    0.000    0.006    0.000 paged_ssd_cache.py:136(_extract_tensor_bytes)
+    85179    0.006    0.000    0.006    0.000 {built-in method time.monotonic}
+88080/88070    0.006    0.000    0.006    0.000 {built-in method builtins.len}
+      330    0.005    0.000    0.013    0.000 qwen3_5.py:132(__call__)
+        5    0.004    0.001    0.004    0.001 scheduler.py:326(_process_prompts)
+    21222    0.004    0.000    0.006    0.000 events.py:78(cancel)
+    84943    0.004    0.000    0.004    0.000 base_events.py:2064(get_debug)
+    21227    0.004    0.000    0.004    0.000 scheduler.py:2940(has_requests)
+      330    0.004    0.000    0.004    0.000 gated_delta.py:171(gated_delta_kernel)
+      440    0.004    0.000    0.010    0.000 qwen3_next.py:327(__call__)
+    42603    0.004    0.000    0.004    0.000 {method 'append' of 'collections.deque' objects}
+       82    0.004    0.000    0.007    0.000 {method 'write' of '_io.BufferedWriter' objects}
+    42474    0.003    0.000    0.004    0.000 {built-in method builtins.max}
+    42500    0.003    0.000    0.003    0.000 {method 'popleft' of 'collections.deque' objects}
+    42446    0.003    0.000    0.003    0.000 selector_events.py:744(_process_events)
+     4301    0.003    0.000    0.003    0.000 quantized.py:242(__call__)
+    42494    0.003    0.000    0.003    0.000 base_events.py:548(_check_closed)
+       10    0.002    0.000   23.534    2.353 _base.py:331(_invoke_callbacks)
+    21222    0.002    0.000    0.002    0.000 {built-in method _heapq.heappop}
+    21222    0.002    0.000    0.002    0.000 {built-in method _heapq.heappush}
+    21252    0.002    0.000    0.002    0.000 {method 'cancelled' of '_asyncio.Future' objects}
+     1320    0.001    0.000    0.002    0.000 switch_layers.py:75(__call__)
+    21222    0.001    0.000    0.001    0.000 {built-in method math.isnan}
+    11226    0.001    0.000    0.002    0.000 base.py:99(__getattr__)
+    21228    0.001    0.000    0.001    0.000 {built-in method _asyncio.get_running_loop}
+    21232    0.001    0.000    0.001    0.000 {built-in method _contextvars.copy_context}
+    19473    0.001    0.000    0.002    0.000 {method 'get' of 'dict' objects}
+    21222    0.001    0.000    0.001    0.000 base_events.py:1961(_timer_handle_cancelled)
+     1111    0.001    0.000    0.001    0.000 normalization.py:142(__call__)
+
+

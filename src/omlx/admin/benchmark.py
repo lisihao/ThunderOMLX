@@ -658,23 +658,25 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
         if request.batch_sizes and 1024 not in prompts:
             prompts[1024] = _generate_prompt(tokenizer, 1024)
 
-        # Warmup: run a short request to trigger JIT compilation,
-        # Metal shader compilation, and KV cache initialization.
-        # Without this, the first real benchmark test absorbs all
-        # one-time overhead and shows artificially low pp TPS.
+        # Warmup: run a request with SAME context length as the actual test
+        # to trigger JIT compilation, Metal shader compilation, and
+        # FULL KV cache allocation. This prevents Token 9 warmup spike
+        # (11.8s delay due to KV cache expansion for long context).
+        # Use max(prompt_lengths) to ensure we allocate for the largest test.
         await _send_event(run, {
             "type": "progress",
             "phase": "warmup",
-            "message": "Warming up (JIT compile)...",
+            "message": "Warming up (JIT + KV cache allocation)...",
             "current": 0,
             "total": total_tests,
         })
-        warmup_prompt = _generate_prompt(tokenizer, 32)
+        max_pp_len = max(request.prompt_lengths) if request.prompt_lengths else 1024
+        warmup_prompt = _generate_prompt(tokenizer, max_pp_len)
         async for _ in engine.stream_generate(
-            prompt=warmup_prompt, max_tokens=8, temperature=0.0
+            prompt=warmup_prompt, max_tokens=16, temperature=0.0
         ):
             pass
-        logger.info("Benchmark: warmup complete")
+        logger.info(f"Benchmark: warmup complete (pp{max_pp_len}, tg16)")
 
         # Phase 3: Single request tests
         single_pp1024_gen_tps = None
@@ -809,6 +811,18 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
             logger.info(f"Benchmark: unloaded {request.model_id} after benchmark")
         except Exception as e:
             logger.warning(f"Benchmark: failed to unload {request.model_id}: {e}")
+
+        # 🔧 Fix: Explicitly clear memory to prevent memory leak
+        # Issue: Second benchmark run shows 38GB memory (double), not releasing properly
+        # Solution: Force MLX Metal cache clear + Python GC
+        import mlx.core as mx
+        import gc
+        import asyncio
+
+        mx.clear_cache()  # Clear MLX Metal cache
+        gc.collect()      # Force Python GC
+        await asyncio.sleep(0.5)  # Allow time for memory release
+        logger.info("Benchmark: memory cleanup complete")
 
         # Done
         overall_duration = time.perf_counter() - overall_start
