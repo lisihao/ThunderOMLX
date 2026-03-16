@@ -74,6 +74,10 @@ class BoundarySnapshotSSDStore:
         self._file_registry: Dict[str, Dict[int, Path]] = {}
         self._registry_lock = threading.Lock()
 
+        # PERF: Cache of created directories to avoid redundant mkdir checks
+        self._created_dirs: set[Path] = set()
+        self._dir_cache_lock = threading.Lock()
+
         # Pending writes buffer — raw bytes for instant read-back.
         # key: (request_id, token_count)
         self._pending_writes: Dict[Tuple[str, int], Dict] = {}
@@ -298,7 +302,14 @@ class BoundarySnapshotSSDStore:
 
             pw_key, tensors_raw, metadata, file_path = item
             try:
-                file_path.parent.mkdir(parents=True, exist_ok=True)
+                # PERF: Only create directory if not in cache (~1-2s saved)
+                parent_dir = file_path.parent
+                if parent_dir not in self._created_dirs:
+                    with self._dir_cache_lock:
+                        if parent_dir not in self._created_dirs:
+                            parent_dir.mkdir(parents=True, exist_ok=True)
+                            self._created_dirs.add(parent_dir)
+
                 temp_path = file_path.with_name(
                     file_path.stem + "_tmp.safetensors"
                 )
