@@ -168,6 +168,8 @@ class ContextPilotAdapter:
         self,
         context_index: Optional[ContextIndex] = None,
         tokenizer: Any = None,
+        fuzzy_match_enabled: bool = True,
+        fuzzy_threshold: float = 0.85,
     ) -> None:
         """
         Initialize the adapter with optional context index and tokenizer.
@@ -176,12 +178,22 @@ class ContextPilotAdapter:
             context_index: Optional ContextIndex instance (creates new one if None)
             tokenizer: Optional tokenizer for precise message boundary computation.
                        If None, message_boundaries will be empty.
+            fuzzy_match_enabled: Enable fuzzy matching for prefix detection (default: True)
+            fuzzy_threshold: Similarity threshold for fuzzy matching (default: 0.85)
+                            Tolerates ~15% character differences (e.g., punctuation, spacing)
         """
         self._context_index = context_index or ContextIndex()
         self._tokenizer = tokenizer
-        logger.debug(
+
+        # Fuzzy match configuration
+        self.fuzzy_match_enabled = fuzzy_match_enabled
+        self.fuzzy_threshold = max(0.0, min(1.0, fuzzy_threshold))  # clamp to [0, 1]
+
+        logger.info(
             f"ContextPilotAdapter initialized "
-            f"(tokenizer={'yes' if tokenizer else 'no'})"
+            f"(tokenizer={'yes' if tokenizer else 'no'}, "
+            f"fuzzy_match={self.fuzzy_match_enabled}, "
+            f"threshold={self.fuzzy_threshold:.2f})"
         )
 
     @property
@@ -345,14 +357,121 @@ class ContextPilotAdapter:
                 break
         return prefix_len
 
-    def _messages_equal(self, m1: Dict[str, Any], m2: Dict[str, Any]) -> bool:
-        """Check if two messages have same content and role."""
+    def _compute_similarity(self, s1: str, s2: str) -> float:
+        """
+        Compute similarity between two strings using Levenshtein distance.
+
+        Uses normalized Levenshtein distance:
+        similarity = 1 - (edit_distance / max_length)
+
+        Optimized with O(min(m,n)) space complexity using rolling arrays
+        and early termination for large differences.
+
+        Args:
+            s1: First string
+            s2: Second string
+
+        Returns:
+            Similarity score (0.0 = completely different, 1.0 = identical)
+        """
+        # Preprocessing: strip leading/trailing whitespace
+        s1 = s1.strip()
+        s2 = s2.strip()
+
+        # Fast path: exact match (after preprocessing)
+        if s1 == s2:
+            return 1.0
+
+        # Edge case: empty strings
+        if not s1 or not s2:
+            return 0.0
+
+        # Optimization: truncate long messages (avoid O(m*n) explosion)
+        MAX_LENGTH = 500  # Reduced from 1000 for better performance
+        s1 = s1[:MAX_LENGTH]
+        s2 = s2[:MAX_LENGTH]
+
+        # Ensure s1 is the shorter string (for space optimization)
+        if len(s1) > len(s2):
+            s1, s2 = s2, s1
+
+        m, n = len(s1), len(s2)
+
+        # Early exit: if length difference is too large
+        max_edit_distance = int(n * (1.0 - self.fuzzy_threshold))
+        if n - m > max_edit_distance:
+            return 0.0  # Too different
+
+        # Rolling array optimization: O(min(m,n)) space
+        prev = list(range(n + 1))
+        curr = [0] * (n + 1)
+
+        for i in range(1, m + 1):
+            curr[0] = i
+            min_val = curr[0]  # Track minimum for early termination
+
+            for j in range(1, n + 1):
+                cost = 0 if s1[i-1] == s2[j-1] else 1
+                curr[j] = min(
+                    prev[j] + 1,      # deletion
+                    curr[j-1] + 1,    # insertion
+                    prev[j-1] + cost  # substitution
+                )
+                min_val = min(min_val, curr[j])
+
+            # Early termination: if minimum distance in row exceeds threshold
+            if min_val > max_edit_distance:
+                return 0.0  # Too different
+
+            prev, curr = curr, prev
+
+        edit_distance = prev[n]
+        similarity = 1.0 - (edit_distance / n)
+
+        return similarity
+
+    def _messages_equal(
+        self,
+        m1: Dict[str, Any],
+        m2: Dict[str, Any],
+        fuzzy: bool = True
+    ) -> bool:
+        """
+        Check if two messages are equal (supports fuzzy matching).
+
+        Args:
+            m1: First message
+            m2: Second message
+            fuzzy: Enable fuzzy matching (default: True)
+
+        Returns:
+            True if messages are considered equal
+        """
         content1 = self._extract_content(m1)
         content2 = self._extract_content(m2)
         role1 = self._extract_role(m1)
         role2 = self._extract_role(m2)
 
-        return content1 == content2 and role1 == role2
+        # Role must exact match (system/user/assistant cannot be confused)
+        if role1 != role2:
+            return False
+
+        # Fast path: exact match
+        if content1 == content2:
+            return True
+
+        # Fallback: fuzzy match (if enabled)
+        if fuzzy and self.fuzzy_match_enabled:
+            similarity = self._compute_similarity(content1, content2)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"Fuzzy match: similarity={similarity:.3f}, "
+                    f"threshold={self.fuzzy_threshold:.2f}, "
+                    f"match={similarity >= self.fuzzy_threshold}"
+                )
+            return similarity >= self.fuzzy_threshold
+
+        return False
 
     def _reorder_messages(
         self,
