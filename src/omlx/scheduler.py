@@ -131,6 +131,11 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
         self._vlm_pending: Dict[int, Tuple[mx.array, Dict[str, Any], int]] = {}
         # Per-UID skip prefill flag (100% cache hit, skip forward pass)
         self._skip_prefill_uids: Set[int] = set()
+        # Performance profiling framework
+        from omlx.profiling import get_global_profiler
+        self._profiler = get_global_profiler()
+        # Note: _profiling_counter is not needed here because this is only for per-prefill profiling,
+        # periodic reporting is handled by Scheduler
 
     # Cache class names known to be sliceable (no boundary snapshots needed).
     _KNOWN_SLICEABLE = frozenset({"KVCache", "BatchKVCache", "QuantizedKVCache"})
