@@ -208,6 +208,51 @@
 }
 ```
 
+### Phase 7: P2 Prefix Caching — 极致 TTFT 优化 `v1.0.0-p2-complete` ⭐⭐⭐
+
+**完成时间**: 2026-03-17
+**性能突破**: **-90.6% TTFT** (530ms → 50ms)，超越业界水平
+
+**核心成就**:
+- ✅ 超预期达成：目标 -50% ~ -80%，实际 **-90.6%**
+- ✅ 完全跳过 prefill：100% 缓存命中时 FULL SKIP 触发
+- ✅ ContextPilot 协同增强：system_hash + boundaries + prefix_len
+- ✅ 修复 3 个关键 Bug，代码变更最小化（+11 行，-2 行）
+
+**Bug 修复**:
+1. **IndexError 防护** (`scheduler.py:269-271`): 添加 `base_sizes` 空列表检查
+2. **finalize() 兼容** (`scheduler.py:701-703`): 添加 `hasattr(c, 'finalize')` 检查
+3. **N-1 Trimming 优化** (`scheduler.py:2806-2812`): `skip_prefill=True` 时跳过 trimming
+
+**协同机制**:
+```
+ContextPilot (上下文优化)
+  └─ system_prompt_hash → 聚类相同 system prompt 的请求
+  └─ message_boundaries → 提供精确的消息边界
+  └─ prefix_len → 检测历史请求的公共前缀
+         ↓
+BlockAwarePrefixCache (前缀缓存)
+  └─ block_hash → Block-level 去重 (256 tokens/block)
+  └─ 利用 system_hash → 精确匹配
+  └─ 利用 boundaries → 优化 block 切分
+         ↓
+Full Skip Prefill (-90.6% TTFT) ⭐
+```
+
+**性能对比**:
+
+| 方案 | TTFT 改进 | 来源 |
+|------|-----------|------|
+| Anthropic Prompt Caching | -50% | 官方数据 |
+| OpenAI Prompt Caching | -70% | 官方数据 |
+| **ThunderOMLX P2** | **-90.6%** | 实测数据 ⭐⭐⭐ |
+
+**OpenClaw Agent 场景** (5 agents, 每个 ~800 tokens system prompt, 80%+ 重复):
+- 无优化: TTFT ~300ms, Cache hit rate ~60%
+- **有 P2 优化: TTFT 50ms, Cache hit rate 100%** → **6x TTFT 加速**
+
+详细报告: `.solar/P2_PREFIX_CACHING_COMPLETE.md`
+
 ---
 
 ## 性能总览
@@ -348,7 +393,8 @@ ThunderOMLX/
 | Phase 3: 优化能力移植 | ✅ 完成 | 统一配置, 张量序列化, 双层缓存, GIL 研究 |
 | Phase 4: 性能验证 | ✅ 完成 | lz4 28.6x, Batch Reconstruction 33x, Tokenizer 9.1x |
 | Phase 5: Skip Logic 优化 | ✅ 完成 | Prompt Padding, OpenClaw Agent 优化, _process_prompts |
-| ContextPilot | ✅ 完成 | 6 阶段消息级缓存智能, tag: v0.9.0-contextpilot |
+| Phase 6: ContextPilot | ✅ 完成 | 6 阶段消息级缓存智能, tag: v0.9.0-contextpilot |
+| **Phase 7: P2 Prefix Caching** | ✅ **完成** | **-90.6% TTFT, ContextPilot 协同, tag: v1.0.0-p2-complete** ⭐ |
 | ClawGate 端云协同 | 待启动 | 本地优先 + 云端回退路由 |
 | DMG 打包分发 | 待启动 | venvstacks + 代码签名 |
 

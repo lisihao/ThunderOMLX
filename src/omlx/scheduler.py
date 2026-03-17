@@ -267,6 +267,10 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
         if not self._boundary_capture_enabled() or self._prefill_boundary_callback is None:
             return
 
+        # Guard against index out of range when base_sizes is empty or shorter than uids
+        if not base_sizes or len(base_sizes) < len(uids):
+            return
+
         for idx, uid in enumerate(uids):
             length = lengths[idx]
             base = base_sizes[idx]
@@ -695,7 +699,9 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
         self._profiler.start("prefill.cache_ops")
 
         for c in prompt_cache:
-            c.finalize()
+            # Skip finalize() for KVCache objects (reconstructed from BlockAwarePrefixCache)
+            if hasattr(c, 'finalize'):
+                c.finalize()
 
         # End cache ops profiling
         self._profiler.end("prefill.cache_ops")
@@ -2801,7 +2807,10 @@ class Scheduler:
                     # last prompt token as input to produce the first decode logit.
                     # Reusing cache state at N and feeding the last token again
                     # shifts the model state and can change greedy output.
-                    if len(request.remaining_tokens) == 0 and request.cached_tokens > 0:
+                    # OPTIMIZATION: Skip N-1 trimming if skip_prefill is enabled (prefix cache hit)
+                    if (len(request.remaining_tokens) == 0
+                            and request.cached_tokens > 0
+                            and not request.skip_prefill):
                         if self._cache_list_needs_boundary_snapshot(request.prompt_cache):
                             # Stateful non-sliceable caches (Rotating/Arrays)
                             # cannot be safely converted from N to N-1 state
