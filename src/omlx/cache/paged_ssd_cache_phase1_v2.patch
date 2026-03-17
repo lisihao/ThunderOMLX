@@ -1,0 +1,133 @@
+## Phase 1 V2: 安全的异步 Tensor 提取
+
+### 核心思路
+
+**问题**: bfloat16 需要二次 eval，无法在后台线程执行
+**解决**: 推理线程预处理所有 arrays（包括 bfloat16 view），后台线程只做纯 memoryview 读取
+
+### 实现方案
+
+#### 1. 新增：预处理函数（推理线程调用）
+
+```python
+def _prepare_array_for_extraction(arr: "mx.array") -> Tuple["mx.array", str, List[int]]:
+    """
+    在推理线程预处理 array，使其可以在后台线程安全提取 bytes。
+
+    关键：对 bfloat16 提前做 view(uint16) + eval，后续只需 memoryview()
+
+    Args:
+        arr: MLX array (已 eval)
+
+    Returns:
+        (prepared_arr, dtype_str, shape) - prepared_arr 可安全跨线程访问
+    """
+    dtype_str = _MX_TO_ST_DTYPE[arr.dtype]
+    shape = list(arr.shape)
+
+    if arr.dtype == mx.bfloat16:
+        # 关键：在推理线程完成 view + eval
+        prepared = arr.view(mx.uint16)
+        mx.eval(prepared)  # Metal 操作，必须在推理线程
+        return prepared, dtype_str, shape
+    else:
+        # 其他类型已经 eval，直接返回
+        return arr, dtype_str, shape
+
+
+def _extract_bytes_from_prepared(prepared_arr: "mx.array") -> bytes:
+    """
+    从预处理的 array 提取 bytes（纯 Python，线程安全）。
+
+    关键：只调用 memoryview()，不调用任何 MLX API
+
+    Args:
+        prepared_arr: 已通过 _prepare_array_for_extraction 处理的 array
+
+    Returns:
+        Raw bytes
+    """
+    # 纯 Python 操作，线程安全
+    return bytes(memoryview(prepared_arr))
+```
+
+#### 2. 修改：save_block（推理线程）
+
+```python
+# 在 save_block 中（推理线程）
+
+# Step 1: 物化所有 arrays
+if arrays:
+    mx.eval(*arrays.values())
+
+# Step 2: 预处理 arrays（处理 bfloat16，但不提取 bytes）
+prepared_data = {}  # {name: (prepared_arr, dtype_str, shape)}
+for name, arr in arrays.items():
+    prepared_arr, dtype_str, shape = _prepare_array_for_extraction(arr)
+    prepared_data[name] = (prepared_arr, dtype_str, shape)
+
+# Step 3: 发送到后台线程（传递 prepared arrays）
+self._write_queue.put_nowait(
+    (block_hash, prepared_data, metadata, file_path)
+)
+```
+
+#### 3. 修改：_writer_loop（后台线程）
+
+```python
+# 在 _writer_loop 中（后台线程）
+
+block_hash, prepared_data, metadata, file_path = item
+
+# Step 1: 在后台线程提取 bytes（纯 Python，线程安全）
+tensors_raw = {}
+for name, (prepared_arr, dtype_str, shape) in prepared_data.items():
+    raw = _extract_bytes_from_prepared(prepared_arr)  # 线程安全！
+    tensors_raw[name] = (raw, dtype_str, shape)
+
+# Step 2: 写入磁盘（现有逻辑）
+_write_safetensors_no_mx(file_path, tensors_raw, metadata)
+```
+
+### 为什么这样安全？
+
+1. **推理线程**：
+   - `mx.eval()` - Metal 操作 ✓
+   - `arr.view(mx.uint16)` - Metal 操作 ✓
+   - `mx.eval(view)` - Metal 操作 ✓
+   - **不提取 bytes** → 不阻塞
+
+2. **后台线程**：
+   - `memoryview(prepared_arr)` - **纯 Python** ✓
+   - `bytes(memoryview)` - **纯 Python** ✓
+   - **无 MLX API 调用** → 线程安全
+
+3. **生命周期**：
+   - prepared_arr 通过队列传递（Python 引用计数保持活跃）
+   - 后台线程提取完 bytes 后，引用自动释放
+   - 无需担心 arrays 被过早 GC
+
+### 预期收益
+
+**推理线程节省**：
+- 之前：2112 次 `_extract_tensor_bytes` (含 memoryview + bytes 拷贝)
+- 现在：2112 次 `_prepare_array_for_extraction` (只做 view + eval，无 bytes 拷贝)
+- **节省**：所有 bytes 拷贝时间（估计 ~1.0-1.5s）
+
+**总体提升**：
+- 当前：757.8 tok/s
+- 预期：~850-880 tok/s (+12-16%)
+
+### 实现步骤
+
+1. 添加两个新函数
+2. 修改 save_block（推理线程部分）
+3. 修改 _writer_loop（后台线程部分）
+4. 测试验证
+
+### 关键验证点
+
+- [ ] prepared_arr 在后台线程访问不会触发 Metal 错误
+- [ ] bytes 内容与原方案完全一致（正确性）
+- [ ] 性能提升符合预期（~12-16%）
+- [ ] 无内存泄漏（arrays 正常释放）

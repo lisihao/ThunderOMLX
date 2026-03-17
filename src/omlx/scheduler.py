@@ -335,6 +335,9 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
         return sampled, list(logprobs)
 
     def _process_prompts(self, prompts):
+        # Performance profiling: Prefill total time
+        self._profiler.start("prefill.total")
+
         # Clear stale mRoPE position state from prior _process_prompts() call.
         # With prefill_batch_size=1, _next() calls _process_prompts() once per
         # prompt sequentially; the previous call's cached _position_ids would
@@ -729,7 +732,12 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
                 use_full_prompt_lengths=True,
             )
 
-        mx.async_eval(y, logprobs)
+        # Performance profiling: Synchronize
+        with self._profiler.section("prefill.synchronize"):
+            mx.async_eval(y, logprobs)
+
+        # End prefill.total profiling
+        self._profiler.end("prefill.total")
 
         return MLXBatch(
             list(uids),
@@ -1286,6 +1294,12 @@ class Scheduler:
         else:
             self.context_pilot = None
             self.request_history = None
+
+        # Performance profiling framework (Phase 5: Systematic Profiling)
+        from omlx.profiling import get_global_profiler
+        self._profiler = get_global_profiler()
+        if self._profiler.enabled:
+            logger.info("🔍 Performance profiling ENABLED (set OMLX_ENABLE_PROFILING=false to disable)")
 
     def _start_adaptive_optimization_loop(self):
         """Start background thread for adaptive optimization."""
@@ -4154,10 +4168,12 @@ class Scheduler:
 
         try:
             # Initialize paged SSD cache manager for SSD storage
+            # Phase 3.1: Disable compression to test impact on writer performance
             self.paged_ssd_cache_manager = PagedSSDCacheManager(
                 cache_dir=Path(self.config.paged_ssd_cache_dir),
                 max_size_bytes=self.config.paged_ssd_cache_max_size,
                 hot_cache_max_bytes=self.config.hot_cache_max_size,
+                enable_compression=False,  # Phase 3.1: Test without compression
             )
             print(f"✅ DEBUG: PagedSSDCacheManager initialized successfully!")
 

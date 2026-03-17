@@ -207,6 +207,7 @@ def _write_safetensors_no_mx(
     Returns:
         Total file size in bytes.
     """
+    # Build header and collect data
     offset = 0
     header_tensors = {}
     all_data = []
@@ -224,11 +225,13 @@ def _write_safetensors_no_mx(
     if metadata:
         header_dict["__metadata__"] = metadata
 
+    # JSON serialization
     header_json = json.dumps(header_dict, separators=(",", ":")).encode("utf-8")
     # Safetensors spec: header must be 8-byte aligned
     pad = (8 - len(header_json) % 8) % 8
     header_json += b" " * pad
 
+    # Write to file (Python buffered I/O handles optimization internally)
     with open(path, "wb") as f:
         f.write(struct.pack("<Q", len(header_json)))
         f.write(header_json)
@@ -724,7 +727,13 @@ class PagedSSDCacheManager(CacheManager):
             "checksum_verifications": 0,  # P1-6
             "checksum_failures": 0,        # P1-6
             "cached_verifications": 0,     # P1-6 optimization: skipped re-verifications
+            # Phase 3: Queue latency monitoring
+            "queue_latency_total_ms": 0.0,
+            "queue_latency_count": 0,
+            "queue_latency_max_ms": 0.0,
         }
+        # Phase 3.2: Stats lock for thread-safe updates from multiple writers
+        self._stats_lock = threading.Lock()
 
         # --- Hot cache (in-memory raw-bytes tier) - LRU-2 ---
         self._hot_cache_max_bytes = hot_cache_max_bytes
@@ -752,12 +761,19 @@ class PagedSSDCacheManager(CacheManager):
         self._pending_write_hashes: set = set()
         self._pending_write_hashes_lock = threading.Lock()
         self._writer_shutdown = threading.Event()
-        self._writer_thread = threading.Thread(
-            target=self._writer_loop,
-            name="ssd-cache-writer",
-            daemon=True,
-        )
-        self._writer_thread.start()
+
+        # Phase 3.2: Multiple writer threads for parallel disk I/O
+        self._num_writers = 4  # Parallel writer threads
+        self._writer_threads = []
+        for i in range(self._num_writers):
+            thread = threading.Thread(
+                target=self._writer_loop,
+                name=f"ssd-cache-writer-{i}",
+                args=(i,),  # Pass thread ID for unique temp file names
+                daemon=True,
+            )
+            thread.start()
+            self._writer_threads.append(thread)
 
         hot_info = ""
         if self._hot_cache_enabled:
@@ -1212,7 +1228,7 @@ class PagedSSDCacheManager(CacheManager):
             logger.debug(f"Failed to read metadata from {file_path}: {e}")
             return None
 
-    def _writer_loop(self) -> None:
+    def _writer_loop(self, thread_id: int = 0) -> None:
         """Background writer that drains the write queue.
 
         Runs in a dedicated daemon thread. Writes full safetensors files
@@ -1222,7 +1238,12 @@ class PagedSSDCacheManager(CacheManager):
         This is safe because save_block() extracts tensor data as raw bytes
         on the inference thread (Metal-safe), and this thread only performs
         standard file I/O operations.
+
+        Args:
+            thread_id: Unique ID for this writer thread (Phase 3.2).
         """
+        import time  # Phase 3: For queue latency measurement
+
         while True:
             try:
                 item = self._write_queue.get(timeout=1.0)
@@ -1235,14 +1256,33 @@ class PagedSSDCacheManager(CacheManager):
             if item is None:  # Sentinel for shutdown
                 break
 
-            block_hash, tensors_raw, metadata, file_path = item
+            # Phase 3: Extract enqueue time and measure queue latency
+            block_hash, tensors_raw, metadata, file_path, enqueue_time = item
+            dequeue_time = time.time()
+            queue_latency_ms = (dequeue_time - enqueue_time) * 1000
+
+            # Phase 3: Log high queue latency for analysis
+            if queue_latency_ms > 100:
+                logger.warning(
+                    f"⏱️ High queue latency: {queue_latency_ms:.1f}ms "
+                    f"(block {block_hash.hex()[:8]})"
+                )
+
+            # Phase 3: Update queue latency stats (thread-safe)
+            with self._stats_lock:
+                self._stats["queue_latency_total_ms"] += queue_latency_ms
+                self._stats["queue_latency_count"] += 1
+                if queue_latency_ms > self._stats["queue_latency_max_ms"]:
+                    self._stats["queue_latency_max_ms"] = queue_latency_ms
+
             temp_path = None
 
             try:
                 # Write safetensors file using pure Python (no mx/Metal API)
                 # PERF: Directory already created by _init_directories(), skip mkdir check (~6s saved!)
+                # Phase 3.2: Add thread_id to temp file name to avoid conflicts
                 temp_path = file_path.with_name(
-                    file_path.stem + "_tmp.safetensors"
+                    file_path.stem + f"_tmp_{thread_id}.safetensors"
                 )
                 actual_size = _write_safetensors_no_mx(
                     str(temp_path), tensors_raw, metadata
@@ -1295,7 +1335,9 @@ class PagedSSDCacheManager(CacheManager):
                 logger.error(
                     f"Background write failed for {block_hash.hex()[:16]}: {e}"
                 )
-                self._stats["errors"] += 1
+                # Phase 3.2: Thread-safe stats update
+                with self._stats_lock:
+                    self._stats["errors"] += 1
                 # Remove from index since file wasn't written
                 self._index.remove(block_hash)
                 # Clean up temp and final files
@@ -1515,8 +1557,10 @@ class PagedSSDCacheManager(CacheManager):
 
             # Enqueue full file write for background thread
             try:
+                # Phase 3: Add enqueue timestamp for latency measurement
+                enqueue_time = time.time()
                 self._write_queue.put_nowait(
-                    (block_hash, tensors_raw, metadata, file_path)
+                    (block_hash, tensors_raw, metadata, file_path, enqueue_time)
                 )
             except queue.Full:
                 logger.warning(
@@ -2514,22 +2558,24 @@ class PagedSSDCacheManager(CacheManager):
                     f"Flushed {flushed} hot cache blocks to SSD write queue"
                 )
 
-        # Signal writer thread to stop (after processing remaining queue)
+        # Signal writer threads to stop (after processing remaining queue)
         self._writer_shutdown.set()
 
-        # Send sentinel to unblock the writer if it's waiting on the queue
-        try:
-            self._write_queue.put_nowait(None)
-        except queue.Full:
-            pass  # Writer will check shutdown flag on next iteration
+        # Phase 3.2: Send sentinel for each writer thread to unblock them
+        for _ in range(self._num_writers):
+            try:
+                self._write_queue.put_nowait(None)
+            except queue.Full:
+                pass  # Writers will check shutdown flag on next iteration
 
-        # Wait for writer to finish — longer timeout to allow flush
+        # Phase 3.2: Wait for all writers to finish
         timeout = 120 if self._hot_cache_enabled else 60
-        self._writer_thread.join(timeout=timeout)
-        if self._writer_thread.is_alive():
-            logger.warning(
-                f"SSD cache writer thread did not stop within {timeout}s"
-            )
+        for i, thread in enumerate(self._writer_threads):
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                logger.warning(
+                    f"SSD cache writer thread {i} did not stop within {timeout}s"
+                )
 
         # Clear hot cache
         with self._hot_cache_lock:
@@ -2907,11 +2953,12 @@ class PagedSSDCacheManager(CacheManager):
             self._prefetcher.stop()
             logger.debug("AsyncPrefetcher stopped")
 
-        # Stop background writer
+        # Stop background writers (Phase 3.2: multiple threads)
         self._writer_shutdown.set()
-        if hasattr(self, '_writer_thread'):
-            self._writer_thread.join(timeout=10.0)
-            logger.debug("Background writer stopped")
+        if hasattr(self, '_writer_threads'):
+            for thread in self._writer_threads:
+                thread.join(timeout=10.0)
+            logger.debug(f"Background writers stopped ({self._num_writers} threads)")
 
         logger.info("PagedSSDCacheManager stopped")
 
