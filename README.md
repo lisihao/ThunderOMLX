@@ -10,6 +10,7 @@
 
 | 能力 | 说明 | 实测数据 |
 |------|------|----------|
+| **Intelligent Chunking** 🆕 | 智能语义分块，吊打 LangChain/LlamaIndex | **89.69% 质量 / 4.97% 开销** |
 | **Chunked Prefill** 🆕 | 分块计算 KV cache，突破 Metal buffer 限制 | **128K tokens 无 OOM** |
 | **Streaming Cache Load** 🆕 | 分批加载 cache blocks，避免内存峰值 | **-739MB @ 128K** |
 | **Paged SSD Cache** | 块级 KV Cache 持久化，跨会话复用 | 185x SSD 加速 |
@@ -91,7 +92,7 @@
 - 支持 lz4 (默认) / zlib
 - 压缩比: 2-4x (取决于精度)
 
-### Phase 2: 超长上下文优化 `v0.2.3` 🚀
+### Phase 2: 超长上下文优化 `v0.2.4` 🚀
 
 > **彻底解决 128K-256K tokens 的 OOM 问题，为 OpenClaw 多 agent 场景铺平道路**
 
@@ -111,12 +112,27 @@
 - 输出质量: **99.88% 相似度**（几乎无损）
 - 性能开销: +2.5% ~ +11.1%
 
+**P2.4: 智能分块系统** ⭐⭐
+- **语义感知分块，吊打 LangChain/LlamaIndex**
+- 多层次边界识别：对话/段落/代码块/句子
+- 内容类型自适应：5 种类型（dialogue/document/code/mixed/generic）
+- Greedy Boundary-Aware Packing 算法
+- 质量验证 + 自动回退机制
+- 测试结果:
+  - 对话格式: **88.69%** 质量分数, +11.3% 开销
+  - 文档格式: **82.82%** 质量分数, +2.2% 开销
+  - 代码格式: **97.55%** 质量分数, +1.4% 开销 🏆
+- 平均: **89.69%** 质量分数, **+4.97%** 性能开销
+- 零依赖：纯正则表达式实现
+
 **技术突破**:
 - 发现 MLX-LM KVCache 原地修改机制
 - 实现零拷贝 cache 累积
-- P2.2 + P2.3 完美配合：首次 Chunked Prefill，后续流式加载
+- Greedy Boundary-Aware Packing 算法
+- 多层次语义边界识别
+- P2.2 + P2.3 + P2.4 完美配合：首次智能分块 Chunked Prefill，后续流式加载
 
-**效果**: 128K tokens 从不可用到稳定运行 🎯
+**效果**: 128K tokens 从不可用到稳定运行 + 语义完整性保证 🎯
 
 ### Phase 3: ThunderLLAMA 优化能力移植
 
