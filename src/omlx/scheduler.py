@@ -338,6 +338,9 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
         # Performance profiling: Prefill total time
         self._profiler.start("prefill.total")
 
+        # Performance profiling: Input preparation
+        self._profiler.start("prefill.prepare_inputs")
+
         # Clear stale mRoPE position state from prior _process_prompts() call.
         # With prefill_batch_size=1, _next() calls _process_prompts() once per
         # prompt sequentially; the previous call's cached _position_ids would
@@ -433,6 +436,12 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
         # VLM batched embeddings (built per-path, used in _step at the end).
         batched_embeds: Optional[mx.array] = None
         batched_extra: Optional[Dict[str, Any]] = None
+
+        # End input preparation profiling
+        self._profiler.end("prefill.prepare_inputs")
+
+        # Performance profiling: Model forward pass
+        self._profiler.start("prefill.model_forward")
 
         # New prompts so
         #   1. Left-pad the inputs
@@ -677,8 +686,14 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
             mx.eval([c.state for c in prompt_cache])
             inputs = last_inputs
 
+        # Performance profiling: Cache operations
+        self._profiler.start("prefill.cache_ops")
+
         for c in prompt_cache:
             c.finalize()
+
+        # End cache ops profiling
+        self._profiler.end("prefill.cache_ops")
 
         # Emit prompt checkpoint callback for upstream parity.
         # When prompt_checkpoint > 1, process remaining tokens before _step.
@@ -691,34 +706,41 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
             )
         if prompt_checkpoint > 1 and not full_skip_mode:
             # ⚡ FULL SKIP: Skip checkpoint processing when 100% cache hit
-            model_kwargs_cp = {}
-            if batched_embeds is not None and batched_embeds.shape[1] >= (prompt_checkpoint - 1):
-                # Slice VLM embeds for the checkpoint-to-last-1 range
-                model_kwargs_cp["inputs_embeds"] = batched_embeds[:, :prompt_checkpoint - 1]
-                if batched_extra:
-                    model_kwargs_cp["vlm_extra_kwargs"] = _slice_vlm_extra(
-                        batched_extra, prompt_checkpoint - 1
-                    )
-            self.model(inputs[:, :prompt_checkpoint - 1], cache=prompt_cache, **model_kwargs_cp)
-            mx.eval([c.state for c in prompt_cache])
+            # Performance profiling: Checkpoint forward pass
+            with self._profiler.section("prefill.checkpoint_forward"):
+                model_kwargs_cp = {}
+                if batched_embeds is not None and batched_embeds.shape[1] >= (prompt_checkpoint - 1):
+                    # Slice VLM embeds for the checkpoint-to-last-1 range
+                    model_kwargs_cp["inputs_embeds"] = batched_embeds[:, :prompt_checkpoint - 1]
+                    if batched_extra:
+                        model_kwargs_cp["vlm_extra_kwargs"] = _slice_vlm_extra(
+                            batched_extra, prompt_checkpoint - 1
+                        )
+                self.model(inputs[:, :prompt_checkpoint - 1], cache=prompt_cache, **model_kwargs_cp)
+                mx.eval([c.state for c in prompt_cache])
             inputs = inputs[:, prompt_checkpoint - 1:]
             if batched_embeds is not None:
                 batched_embeds = batched_embeds[:, prompt_checkpoint - 1:]
                 if batched_extra:
                     batched_extra = _advance_vlm_extra(batched_extra, prompt_checkpoint - 1)
 
+        # End model forward profiling (after checkpoint if any)
+        self._profiler.end("prefill.model_forward")
+
         mx.clear_cache()
 
-        # Pass remaining VLM embeddings (last token) to _step if available.
-        step_kwargs: Dict[str, Any] = {}
-        if batched_embeds is not None and batched_embeds.shape[1] > 0:
-            step_kwargs["inputs_embeds"] = batched_embeds
-            if batched_extra:
-                step_kwargs["vlm_extra_kwargs"] = batched_extra
-        y, logprobs = self._step(
-            inputs, prompt_cache, samplers, logits_processors, tokens,
-            **step_kwargs,
-        )
+        # Performance profiling: Final step
+        with self._profiler.section("prefill.final_step"):
+            # Pass remaining VLM embeddings (last token) to _step if available.
+            step_kwargs: Dict[str, Any] = {}
+            if batched_embeds is not None and batched_embeds.shape[1] > 0:
+                step_kwargs["inputs_embeds"] = batched_embeds
+                if batched_extra:
+                    step_kwargs["vlm_extra_kwargs"] = batched_extra
+            y, logprobs = self._step(
+                inputs, prompt_cache, samplers, logits_processors, tokens,
+                **step_kwargs,
+            )
 
         # Skip boundary snapshots in FULL SKIP mode - no new prefill computation
         # so no need to emit boundary tracking (saves ~2-3ms)
