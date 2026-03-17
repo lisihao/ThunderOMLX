@@ -134,6 +134,51 @@ prefill.synchronize                                       1       3.00          
 - ⚠️ prefill.final_step: 14.5%
 - ✅ 其他操作占比 < 10%
 
+### 测试脚本: test_profiling_real.py（真实模型）
+
+**测试环境**:
+- 模型: qwen3.5-35b-mlx
+- Prompt: 8192 tokens
+- 配置: 缓存禁用（纯 Prefill 性能）
+- 日期: 2026-03-16
+
+**真实 Prefill 性能数据**:
+```
+================================================================================
+Performance Profiling Results
+================================================================================
+Total Time: 10084.2 ms
+
+Operation                                             Count   Avg (ms)   Total (ms)      %
+--------------------------------------------------------------------------------
+prefill.total                                             1   10084.21      10084.2 100.0%
+prefill.model_forward                                     1   10061.26      10061.3  99.8%
+prefill.synchronize                                       1      18.85         18.8   0.2%
+prefill.final_step                                        1       3.67          3.7   0.0%
+prefill.prepare_inputs                                    1       0.13          0.1   0.0%
+prefill.cache_ops                                         1       0.05          0.1   0.0%
+================================================================================
+```
+
+**关键发现**:
+- ⚠️ **model_forward 占 99.8%** - 绝对瓶颈（10.06s / 10.08s）
+- ✅ synchronize 仅 18.8ms (0.2%) - 异步 eval 效果良好
+- ✅ prepare_inputs 极快 (0.13ms) - 输入准备开销可忽略
+- ✅ cache_ops 极快 (0.05ms) - Cache 操作高效
+- ✅ final_step 仅 3.7ms - _step 调用开销很小
+
+**性能指标**:
+- Prefill 时间: 10.118s
+- PP TPS: **809.6 tok/s** (8192 tokens / 10.118s)
+- 瓶颈清晰：优化重点应在 model_forward（模型推理本身）
+
+**优化方向** (基于真实数据):
+1. ✅ **Chunked Prefill** - 已实现，可以避免一次处理 8K tokens
+2. 🔄 **FlashAttention** - 加速注意力计算（model_forward 的主体）
+3. 🔄 **Fused QKV Projection** - 减少 Metal kernel 启动次数
+4. ❌ ~~异步 prepare_inputs~~ - 无需优化（仅 0.13ms）
+5. ❌ ~~异步 cache_ops~~ - 无需优化（仅 0.05ms）
+
 ---
 
 ## 🎯 使用方法
@@ -294,9 +339,11 @@ class Qwen3Attention:
 | prefill.total timing | ✅ 完成 |
 | 细粒度 profiling (6个点) | ✅ 完成 |
 | 百分比计算正确 | ✅ 修复完成 |
-| 测试验证 | ✅ 通过 |
+| 模拟测试验证 | ✅ 通过 (test_profiling_simple.py) |
+| 真实模型测试 | ✅ 通过 (test_profiling_real.py, 8K tokens) |
+| 瓶颈识别准确 | ✅ 完成 (model_forward 99.8%) |
 | 文档完善 | ✅ 完成 |
-| Git 提交 | ✅ 完成（3个commits）|
+| Git 提交 | ✅ 完成（5个commits）|
 
 ---
 
