@@ -189,6 +189,11 @@ class ContextPilotAdapter:
         self.fuzzy_match_enabled = fuzzy_match_enabled
         self.fuzzy_threshold = max(0.0, min(1.0, fuzzy_threshold))  # clamp to [0, 1]
 
+        # Similarity cache: (s1_hash, s2_hash) -> similarity
+        # LRU cache with max 1000 entries to avoid memory bloat
+        self._similarity_cache: Dict[Tuple[int, int], float] = {}
+        self._cache_max_size = 1000
+
         logger.info(
             f"ContextPilotAdapter initialized "
             f"(tokenizer={'yes' if tokenizer else 'no'}, "
@@ -342,6 +347,10 @@ class ContextPilotAdapter:
 
         Two messages match if both content and role are identical.
 
+        Optimization: Only use fuzzy match for the first message (system prompt),
+        which is typically long and prone to minor variations.
+        Use exact match for remaining messages for performance.
+
         Args:
             msgs1: First message list
             msgs2: Second message list
@@ -350,8 +359,10 @@ class ContextPilotAdapter:
             Length of common prefix (number of matching messages from start)
         """
         prefix_len = 0
-        for m1, m2 in zip(msgs1, msgs2):
-            if self._messages_equal(m1, m2):
+        for idx, (m1, m2) in enumerate(zip(msgs1, msgs2)):
+            # Only use fuzzy match for first message (typically system prompt)
+            use_fuzzy = (idx == 0)
+            if self._messages_equal(m1, m2, fuzzy=use_fuzzy):
                 prefix_len += 1
             else:
                 break
@@ -366,6 +377,8 @@ class ContextPilotAdapter:
 
         Optimized with O(min(m,n)) space complexity using rolling arrays
         and early termination for large differences.
+
+        Includes LRU cache to avoid recomputing similarity for same string pairs.
 
         Args:
             s1: First string
@@ -385,6 +398,13 @@ class ContextPilotAdapter:
         # Edge case: empty strings
         if not s1 or not s2:
             return 0.0
+
+        # Cache lookup: use hash of strings as key
+        h1, h2 = hash(s1), hash(s2)
+        cache_key = (min(h1, h2), max(h1, h2))  # Ensure order-independent
+
+        if cache_key in self._similarity_cache:
+            return self._similarity_cache[cache_key]
 
         # Optimization: truncate long messages (avoid O(m*n) explosion)
         MAX_LENGTH = 500  # Reduced from 1000 for better performance
@@ -427,6 +447,15 @@ class ContextPilotAdapter:
 
         edit_distance = prev[n]
         similarity = 1.0 - (edit_distance / n)
+
+        # Store in cache (LRU eviction if cache is full)
+        if len(self._similarity_cache) >= self._cache_max_size:
+            # Simple LRU: remove first (oldest) entry
+            # (dict maintains insertion order in Python 3.7+)
+            first_key = next(iter(self._similarity_cache))
+            del self._similarity_cache[first_key]
+
+        self._similarity_cache[cache_key] = similarity
 
         return similarity
 
