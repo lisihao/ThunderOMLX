@@ -1462,24 +1462,41 @@ class BlockAwarePrefixCache(CacheManager):
                     self.paged_cache.free_block(bid)
                 return None
 
-            # ⚡ PHASE 2: Batch load all blocks in parallel (Smart Prefetch)
+            # ⚡ PHASE 2: Load blocks (Streaming or Batch, based on size)
             import time
             batch_start = time.time()
 
             block_hashes = [bh for _, _, bh in blocks_to_load]
-            logger.info(
-                f"⚡ [Smart Prefetch Phase 2] Starting BATCH load of {len(block_hashes)} blocks "
-                f"(hashes: {[h.hex()[:8] for h in block_hashes[:3]]}...)"
-            )
+            num_blocks = len(block_hashes)
 
-            loaded_blocks_dict = self.paged_ssd_cache.load_blocks_batch(
-                block_hashes, max_workers=4
-            )
+            # P2.2: Use streaming load for large context (>32 blocks = >8K tokens)
+            # Avoids OOM on 128K-256K token contexts
+            STREAMING_THRESHOLD = 32  # blocks
+
+            if num_blocks > STREAMING_THRESHOLD:
+                logger.info(
+                    f"⚡ [Smart Prefetch Phase 2] Using STREAMING load for {num_blocks} blocks "
+                    f"(threshold: {STREAMING_THRESHOLD})"
+                )
+                loaded_blocks_dict = self._load_blocks_streaming(
+                    blocks_to_load,
+                    batch_size_initial=16,
+                    batch_size_streaming=16,
+                    memory_threshold_gb=5.0,
+                )
+            else:
+                logger.info(
+                    f"⚡ [Smart Prefetch Phase 2] Using BATCH load for {num_blocks} blocks "
+                    f"(below threshold: {STREAMING_THRESHOLD})"
+                )
+                loaded_blocks_dict = self.paged_ssd_cache.load_blocks_batch(
+                    block_hashes, max_workers=4
+                )
 
             batch_elapsed = time.time() - batch_start
             logger.info(
-                f"⚡ [Smart Prefetch Phase 2] BATCH load completed in {batch_elapsed*1000:.1f}ms "
-                f"({len([v for v in loaded_blocks_dict.values() if v is not None])}/{len(block_hashes)} successful)"
+                f"⚡ [Smart Prefetch Phase 2] Load completed in {batch_elapsed*1000:.1f}ms "
+                f"({len([v for v in loaded_blocks_dict.values() if v is not None])}/{num_blocks} successful)"
             )
 
             # Also load metadata for first block (for validation)
@@ -2169,6 +2186,144 @@ class BlockAwarePrefixCache(CacheManager):
                 return False
 
         return True
+
+    def _check_memory_safe(self, threshold_gb: float = 5.0) -> bool:
+        """
+        检查系统内存是否安全（P2.2: 流式加载内存保护）。
+
+        Args:
+            threshold_gb: 可用内存阈值（GB），默认 5GB
+
+        Returns:
+            True if available memory >= threshold, False otherwise
+        """
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            available_gb = mem.available / (1024 ** 3)
+
+            if available_gb < 2:
+                logger.error(f"❌ [Memory] CRITICAL: {available_gb:.1f}GB available")
+                return False
+            elif available_gb < threshold_gb:
+                logger.warning(f"⚠️ [Memory] LOW: {available_gb:.1f}GB available")
+                return False
+            else:
+                logger.debug(f"✅ [Memory] OK: {available_gb:.1f}GB available")
+                return True
+        except ImportError:
+            # psutil 不可用，假设安全
+            logger.debug("[Memory] psutil not available, skipping memory check")
+            return True
+        except Exception as e:
+            logger.warning(f"[Memory] Check failed: {e}, assuming safe")
+            return True
+
+    def _load_blocks_streaming(
+        self,
+        blocks_to_load: List[Tuple[int, Any, bytes]],
+        batch_size_initial: int = 16,
+        batch_size_streaming: int = 16,
+        memory_threshold_gb: float = 5.0,
+    ) -> Dict[bytes, Any]:
+        """
+        流式分批加载 blocks，支持超长上下文（P2.2 优化）。
+
+        核心思想：
+        - 首批加载（同步）：前 N 个 blocks（包含 system prompt）
+        - 流式加载（异步）：剩余 blocks 分批加载，内存可控
+        - 内存保护：动态检查可用内存，避免 OOM
+
+        适用场景：
+        - OpenClaw 多 agent（64K+ tokens）
+        - 超长上下文（128K-256K tokens）
+
+        Args:
+            blocks_to_load: 需要加载的 blocks 列表 [(block_id, block, block_hash), ...]
+            batch_size_initial: 首批加载大小（优先级最高，同步加载）
+            batch_size_streaming: 流式批次大小
+            memory_threshold_gb: 内存安全阈值（GB）
+
+        Returns:
+            加载的 blocks 字典 {block_hash: block_data}
+        """
+        total_blocks = len(blocks_to_load)
+        loaded_blocks_dict = {}
+
+        logger.info(
+            f"⚡ [Streaming Load] Starting streaming load "
+            f"(total {total_blocks} blocks, "
+            f"batch_initial={batch_size_initial}, "
+            f"batch_streaming={batch_size_streaming})"
+        )
+
+        # Phase 1: 优先加载首批 blocks（同步）
+        initial_batch = blocks_to_load[:batch_size_initial]
+        if initial_batch:
+            initial_mem_mb = len(initial_batch) * 40  # Rough estimate
+            logger.info(
+                f"⚡ [Streaming Phase 1] Loading initial batch "
+                f"({len(initial_batch)}/{total_blocks} blocks, "
+                f"~{initial_mem_mb}MB memory)"
+            )
+
+            import time
+            phase1_start = time.time()
+
+            initial_hashes = [bh for _, _, bh in initial_batch]
+            initial_dict = self.paged_ssd_cache.load_blocks_batch(
+                initial_hashes, max_workers=4
+            )
+            loaded_blocks_dict.update(initial_dict)
+
+            phase1_elapsed = time.time() - phase1_start
+            logger.info(
+                f"⚡ [Streaming Phase 1] Initial batch loaded in {phase1_elapsed*1000:.1f}ms "
+                f"({len([v for v in initial_dict.values() if v is not None])}/{len(initial_batch)} successful)"
+            )
+
+        # Phase 2+: 流式加载剩余 blocks
+        remaining_blocks = blocks_to_load[batch_size_initial:]
+
+        if remaining_blocks:
+            logger.info(
+                f"⚡ [Streaming Phase 2+] Starting streaming load "
+                f"({len(remaining_blocks)} remaining blocks, "
+                f"batch_size={batch_size_streaming})"
+            )
+
+            # 分批加载
+            batch_idx = 0
+            for i in range(0, len(remaining_blocks), batch_size_streaming):
+                batch = remaining_blocks[i:i + batch_size_streaming]
+                batch_idx += 1
+
+                # 内存保护检查
+                if not self._check_memory_safe(threshold_gb=memory_threshold_gb):
+                    logger.warning(
+                        f"⚠️ [Streaming Load] Memory critical at batch {batch_idx}, "
+                        f"pausing (loaded {len(loaded_blocks_dict)}/{total_blocks} blocks)"
+                    )
+                    break
+
+                # 加载当前批次
+                batch_hashes = [bh for _, _, bh in batch]
+                batch_dict = self.paged_ssd_cache.load_blocks_batch(
+                    batch_hashes, max_workers=4
+                )
+                loaded_blocks_dict.update(batch_dict)
+
+                logger.debug(
+                    f"⚡ [Streaming Load] Batch {batch_idx} loaded "
+                    f"({len(batch)} blocks, total {len(loaded_blocks_dict)}/{total_blocks})"
+                )
+
+        logger.info(
+            f"⚡ [Streaming Load] Completed "
+            f"({len(loaded_blocks_dict)}/{total_blocks} blocks loaded)"
+        )
+
+        return loaded_blocks_dict
 
     def _find_best_prefix_match(
         self,
