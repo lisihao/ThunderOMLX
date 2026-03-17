@@ -766,19 +766,6 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
         # End prefill.total profiling
         self._profiler.end("prefill.total")
 
-        # Periodic profiling report
-        if self._profiler.enabled:
-            self._profiling_counter += 1
-            if self._profiling_counter >= self._profiling_interval:
-                logger.info(f"\n{'='*80}")
-                logger.info(f"📊 Performance Profiling Report (after {self._profiling_counter} prefills)")
-                logger.info(f"{'='*80}")
-                from omlx.profiling import print_profiling_stats
-                print_profiling_stats(top_n=30, min_percent=1.0)
-                logger.info(f"{'='*80}\n")
-                # Reset counter after printing
-                self._profiling_counter = 0
-
         return MLXBatch(
             list(uids),
             y,
@@ -1337,13 +1324,10 @@ class Scheduler:
 
         # Performance profiling framework (Phase 5: Systematic Profiling)
         from omlx.profiling import get_global_profiler
-        import os
         self._profiler = get_global_profiler()
-        self._profiling_counter = 0  # Count prefills for periodic reporting
-        self._profiling_interval = int(os.getenv('OMLX_PROFILING_INTERVAL', '10'))  # Print every N prefills
         if self._profiler.enabled:
-            logger.info(f"🔍 Performance profiling ENABLED (set OMLX_ENABLE_PROFILING=false to disable)")
-            logger.info(f"📊 Profiling stats will be printed every {self._profiling_interval} prefills")
+            logger.info("🔍 Performance profiling ENABLED (set OMLX_ENABLE_PROFILING=false to disable)")
+            logger.info("📊 Use print_profiling_stats() to view profiling data")
 
     def _start_adaptive_optimization_loop(self):
         """Start background thread for adaptive optimization."""
