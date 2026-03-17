@@ -1471,7 +1471,9 @@ class BlockAwarePrefixCache(CacheManager):
 
             # P2.2: Use streaming load for large context (>32 blocks = >8K tokens)
             # Avoids OOM on 128K-256K token contexts
-            STREAMING_THRESHOLD = 32  # blocks
+            # Can be overridden via OMLX_STREAMING_THRESHOLD env var (for testing)
+            import os
+            STREAMING_THRESHOLD = int(os.getenv("OMLX_STREAMING_THRESHOLD", "32"))  # blocks
 
             if num_blocks > STREAMING_THRESHOLD:
                 logger.info(
