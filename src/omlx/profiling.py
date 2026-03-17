@@ -199,11 +199,11 @@ class PerformanceProfiler:
             }
         """
         with self._lock:
-            # 计算总时间（只计算顶层操作，避免重复）
-            total_time_ms = sum(
-                stats.total_ms
-                for name, stats in self._stats.items()
-                if '.' not in name  # 只计算顶层
+            # 计算总时间（使用最大的操作时间作为基准）
+            # 通常是以".total"结尾的顶层操作
+            total_time_ms = max(
+                (stats.total_ms for stats in self._stats.values()),
+                default=0.0
             )
 
             # 转换为字典并计算百分比
