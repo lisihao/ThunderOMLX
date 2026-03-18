@@ -176,6 +176,42 @@ def _extract_tensor_bytes(arr: "mx.array") -> Tuple[bytes, str, List[int]]:
     return raw, dtype_str, shape
 
 
+def _extract_tensor_bytes_batch(
+    arrays: Dict[str, "mx.array"],
+) -> Dict[str, Tuple[bytes, str, List[int]]]:
+    """Batch extract raw bytes from multiple evaluated mx.arrays.
+
+    Optimized for bfloat16: collects all uint16 views and calls mx.eval()
+    once instead of per-array, reducing Metal synchronization overhead
+    from O(N) to O(1).
+
+    Args:
+        arrays: Dict of name -> evaluated MLX array.
+
+    Returns:
+        Dict of name -> (raw_bytes, safetensors_dtype_string, shape_list).
+    """
+    result = {}
+    bf16_views = {}
+
+    for name, arr in arrays.items():
+        dtype_str = _MX_TO_ST_DTYPE[arr.dtype]
+        shape = list(arr.shape)
+        if arr.dtype == mx.bfloat16:
+            bf16_views[name] = (arr.view(mx.uint16), dtype_str, shape)
+        else:
+            raw = bytes(memoryview(arr))
+            result[name] = (raw, dtype_str, shape)
+
+    if bf16_views:
+        mx.eval(*(v[0] for v in bf16_views.values()))
+        for name, (u16, dtype_str, shape) in bf16_views.items():
+            raw = bytes(memoryview(u16))
+            result[name] = (raw, dtype_str, shape)
+
+    return result
+
+
 def _restore_tensor_from_bytes(
     raw: bytes, dtype_str: str, shape: List[int]
 ) -> "mx.array":
@@ -1614,9 +1650,8 @@ class PagedSSDCacheManager(CacheManager):
 
             if self._hot_cache_enabled:
                 # Hot cache enabled: extract bytes synchronously (needed for immediate read-back)
-                tensors_raw = {}
-                for name, arr in arrays.items():
-                    tensors_raw[name] = _extract_tensor_bytes(arr)
+                # Batch bfloat16 views: single mx.eval() instead of per-array
+                tensors_raw = _extract_tensor_bytes_batch(arrays)
 
                 # P1-6: Add checksum to metadata
                 if self.enable_checksum:
@@ -1633,14 +1668,18 @@ class PagedSSDCacheManager(CacheManager):
                 numpy_convert_start = time.perf_counter()
 
                 arrays_as_numpy = {}
+                # Batch bfloat16 view conversion: collect all views, single eval
+                bf16_views = {}
                 for name, arr in arrays.items():
-                    # Handle bfloat16 by converting to uint16 view first
                     if arr.dtype == mx.bfloat16:
-                        u16 = arr.view(mx.uint16)
-                        mx.eval(u16)
-                        arrays_as_numpy[name] = np.array(u16, copy=True)
+                        bf16_views[name] = arr.view(mx.uint16)
                     else:
                         arrays_as_numpy[name] = np.array(arr, copy=True)
+
+                if bf16_views:
+                    mx.eval(*bf16_views.values())  # Single Metal sync for all bf16 views
+                    for name, u16 in bf16_views.items():
+                        arrays_as_numpy[name] = np.array(u16, copy=True)
 
                 numpy_convert_time_ms = (time.perf_counter() - numpy_convert_start) * 1000
 

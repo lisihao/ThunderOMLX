@@ -1965,6 +1965,22 @@ async def stream_chat_completion(
             stream_content = False
     try:
         async for output in engine.stream_chat(messages=messages, **kwargs):
+            # Handle prefill progress events (before first token)
+            if output.prefill_progress:
+                progress_chunk = ChatCompletionChunk(
+                    id=response_id,
+                    model=request.model,
+                    choices=[ChatCompletionChunkChoice(
+                        delta=ChatCompletionChunkDelta(),
+                        finish_reason=None,
+                    )],
+                )
+                # Add prefill_progress as extension field
+                progress_data = progress_chunk.model_dump(exclude_none=True)
+                progress_data["choices"][0]["delta"]["prefill_progress"] = output.prefill_progress
+                yield f"data: {json.dumps(progress_data)}\n\n"
+                continue
+
             if first_token_time is None and output.new_text:
                 first_token_time = time.perf_counter()
             last_output = output
@@ -2268,6 +2284,10 @@ async def stream_anthropic_messages(
     # 3. Stream content with thinking/content separation
     try:
         async for output in engine.stream_chat(messages=messages, **kwargs):
+            # Handle prefill progress events (before first token) - skip for Anthropic format
+            if output.prefill_progress:
+                continue
+
             last_output = output  # Keep reference for tool_calls and token counts
 
             if first_token_time is None and output.new_text:
@@ -3053,6 +3073,10 @@ async def stream_responses_api(
 
     try:
         async for output in engine.stream_chat(messages=messages, **kwargs):
+            # Handle prefill progress events (before first token) - skip for Responses API
+            if output.prefill_progress:
+                continue
+
             if first_token_time is None and output.new_text:
                 first_token_time = time.perf_counter()
             last_output = output

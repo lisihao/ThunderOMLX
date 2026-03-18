@@ -24,6 +24,8 @@ class IntelligentChunker:
         self,
         target_size: int = 4096,
         flexibility: float = 0.125,
+        block_size: int = 256,
+        align_mode: str = "none",
         min_quality_score: float = 0.8
     ):
         """
@@ -32,10 +34,14 @@ class IntelligentChunker:
         Args:
             target_size: 目标 chunk size
             flexibility: 弹性范围（相对于 target_size 的比例）
+            block_size: KV Cache 块大小（保留，用于未来 paged KV 场景）
+            align_mode: 对齐模式 ("none"|"soft"|"hard")，默认 none
             min_quality_score: 最低质量分数（低于此值自动回退到固定分块）
         """
         self.target_size = target_size
         self.flexibility = flexibility
+        self.block_size = block_size
+        self.align_mode = align_mode
         self.min_quality_score = min_quality_score
 
         # 初始化各模块
@@ -43,7 +49,9 @@ class IntelligentChunker:
         self.boundary_extractor = BoundaryExtractor()
         self.dynamic_chunker = DynamicChunker(
             target_size=target_size,
-            flexibility=flexibility
+            flexibility=flexibility,
+            block_size=block_size,
+            align_mode=align_mode
         )
         self.quality_validator = QualityValidator()
 
@@ -128,7 +136,20 @@ class IntelligentChunker:
             print(f"{'='*60}\n")
 
         # 3. 执行分块预填充
-        cache = [KVCache() for _ in range(len(model.model.layers))]
+        # 使用模型的 make_cache() 方法创建正确的 cache 类型
+        # 对于 qwen3.5 等混合架构，不同层需要不同的 cache（ArraysCache vs KVCache）
+        if hasattr(model, 'make_cache'):
+            cache = model.make_cache()
+        else:
+            # 回退：检测模型结构（兼容不同模型）
+            if hasattr(model, 'model') and hasattr(model.model, 'layers'):
+                num_layers = len(model.model.layers)
+            elif hasattr(model, 'layers'):
+                num_layers = len(model.layers)
+            else:
+                raise AttributeError("Cannot find model layers")
+            cache = [KVCache() for _ in range(num_layers)]
+
         stats = ChunkStats()
 
         import time
@@ -144,7 +165,8 @@ class IntelligentChunker:
 
             # 确保计算完成
             mx.eval(logits)
-            mx.eval([c.keys for c in cache])
+            # 只对 KVCache 类型的 cache eval keys（ArraysCache 没有 keys 属性）
+            mx.eval([c.keys for c in cache if isinstance(c, KVCache)])
 
             chunk_time = time.time() - chunk_start_time
 
@@ -172,7 +194,8 @@ class IntelligentChunker:
 
             logits = model(next_token_mx, cache=cache)
             mx.eval(logits)
-            mx.eval([c.keys for c in cache])
+            # 只对 KVCache 类型的 cache eval keys（ArraysCache 没有 keys 属性）
+            mx.eval([c.keys for c in cache if isinstance(c, KVCache)])
 
             # 采样下一个 token
             next_token = mx.argmax(logits[0, -1, :], keepdims=True).item()
@@ -202,6 +225,8 @@ def intelligent_chunked_prefill(
     prompt: str,
     target_size: int = 4096,
     flexibility: float = 0.125,
+    block_size: int = 256,
+    align_mode: str = "none",
     max_tokens: int = 100,
     verbose: bool = True
 ) -> Tuple[str, ChunkStats, ChunkQuality]:
@@ -214,6 +239,8 @@ def intelligent_chunked_prefill(
         prompt: 输入提示
         target_size: 目标 chunk size（默认 4096）
         flexibility: 弹性范围（默认 ±12.5%）
+        block_size: KV Cache 块大小（默认 256，保留用于未来 paged KV 场景）
+        align_mode: 对齐模式（默认 "none"，MLX token-level cache 无需对齐）
         max_tokens: 最大生成 tokens（默认 100）
         verbose: 是否打印详细信息（默认 True）
 
@@ -225,7 +252,9 @@ def intelligent_chunked_prefill(
     """
     chunker = IntelligentChunker(
         target_size=target_size,
-        flexibility=flexibility
+        flexibility=flexibility,
+        block_size=block_size,
+        align_mode=align_mode
     )
 
     return chunker.intelligent_chunked_prefill(

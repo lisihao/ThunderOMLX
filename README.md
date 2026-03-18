@@ -10,9 +10,11 @@
 
 | 能力 | 说明 | 实测数据 |
 |------|------|----------|
-| **Intelligent Chunking** 🆕 | 智能语义分块，吊打 LangChain/LlamaIndex | **89.69% 质量 / 4.97% 开销** |
-| **Chunked Prefill** 🆕 | 分块计算 KV cache，突破 Metal buffer 限制 | **128K tokens 无 OOM** |
-| **Streaming Cache Load** 🆕 | 分批加载 cache blocks，避免内存峰值 | **-739MB @ 128K** |
+| **U-Shape Reinforcement** 🆕 | BM25 + 抽取式摘要注入 prompt 尾部，对抗 Lost-in-the-Middle | **中英文混合分词 + Fail-safe** |
+| **Prefill Progress Streaming** 🆕 | 长 prompt prefill 期间实时推送进度到 SSE 流 | **-80% 感知 TTFT** |
+| **Intelligent Chunking** | 智能语义分块，吊打 LangChain/LlamaIndex | **89.69% 质量 / 4.97% 开销** |
+| **Chunked Prefill** | 分块计算 KV cache，突破 Metal buffer 限制 | **128K tokens 无 OOM** |
+| **Streaming Cache Load** | 分批加载 cache blocks，避免内存峰值 | **-739MB @ 128K** |
 | **Paged SSD Cache** | 块级 KV Cache 持久化，跨会话复用 | 185x SSD 加速 |
 | **Full Skip Logic** | 100% 缓存命中时完全跳过 prefill | 55-78x 重复推理加速 |
 | **Hybrid Hashing** | xxHash64 双重哈希，极速前缀匹配 | 50x vs SHA256 |
@@ -235,6 +237,37 @@
 }
 ```
 
+### Phase 8: P2.5 智能增强三部曲 `v0.3.0` 🆕
+
+> **三阶段递进优化：语义分块校正 → 注意力增强 → 感知 TTFT 突破**
+
+**P2.5 Phase 1: Cache-Aligned Chunking 诊断**
+- 实现 cache alignment 对齐功能后，发现 MLX 的 step=256 是内存分配器增长步长，非 block boundary
+- 经外部专家诊断：MLX prefix cache 是 token-level 复用，对齐到 256 倍数无性能收益
+- **决策**: 保持纯语义分块（Option C），保留 align_mode 功能开关供未来 paged KV 使用
+- 14/14 测试通过
+
+**P2.5 Phase 2: U-Shape Reinforcement** ⭐
+- **解决 "Lost in the Middle" 注意力退化问题**
+- BM25 识别 top-K query 相关 chunks（bm25s + mixed_tokenize 中英文混合分词）
+- 抽取式摘要追加到 prompt 尾部（U-curve 高注意力区域）
+- 不重排原文档（保护 prefix cache）
+- Fail-safe: 异常时返回原始 messages 不变
+- 新建模块: `src/omlx/ushape/` (5 文件, 477 行)
+
+**P2.5 Phase 3: Prefill Progress Streaming** ⭐⭐
+- **-80% 感知 TTFT**: 长 prompt (32K-128K tokens) prefill 期间实时推送进度
+- 线程安全 `queue.Queue` (maxsize=500) 桥接 executor 线程 → asyncio 事件循环
+- Engine loop 50ms polling: `asyncio.shield` + `wait_for` 替代阻塞 `run_in_executor`
+- SSE 扩展字段: `delta.prefill_progress = {processed_tokens, total_tokens}`
+- 客户端可渲染: "处理中: 45% (36K/82K tokens)" → 然后切换到正常 token 流
+- Anthropic/Responses API: 静默跳过进度事件（向后兼容）
+- 6/6 测试通过
+
+**附加优化**:
+- **bfloat16 批量 eval**: 80 次独立 `mx.eval()` → 1 次批量调用，5.7x Metal 同步加速
+- **结构化启动配置输出**: `[SECTION] key=value` 格式，API key 自动掩码
+
 ### Phase 7: P2 Prefix Caching — 极致 TTFT 优化 `v1.0.0-p2-complete` ⭐⭐⭐
 
 **完成时间**: 2026-03-17
@@ -398,6 +431,11 @@ ThunderOMLX/
 │   │   ├── paged_cache.py     # 块级 KV Cache 管理
 │   │   ├── paged_ssd_cache.py # SSD 持久化 (lz4 压缩)
 │   │   └── ...
+│   ├── ushape/                  # U-Shape Reinforcement 模块 🆕
+│   │   ├── augmenter.py       # 主编排器 (query→分块→BM25→摘要→注入)
+│   │   ├── bm25_scorer.py     # 中英文混合 BM25 评分
+│   │   ├── extractor.py       # 抽取式摘要
+│   │   └── types.py           # UShapeConfig, ScoredChunk
 │   ├── contextpilot/
 │   │   ├── adapter.py         # ContextPilot 核心 (577 行)
 │   │   └── __init__.py
@@ -422,6 +460,7 @@ ThunderOMLX/
 | Phase 5: Skip Logic 优化 | ✅ 完成 | Prompt Padding, OpenClaw Agent 优化, _process_prompts |
 | Phase 6: ContextPilot | ✅ 完成 | 6 阶段消息级缓存智能, tag: v0.9.0-contextpilot |
 | **Phase 7: P2 Prefix Caching** | ✅ **完成** | **-90.6% TTFT, ContextPilot 协同, tag: v1.0.0-p2-complete** ⭐ |
+| **Phase 8: P2.5 智能增强三部曲** | ✅ **完成** | **U-Shape + Prefill Progress + bfloat16 优化, tag: v0.3.0** 🆕 |
 | ClawGate 端云协同 | 待启动 | 本地优先 + 云端回退路由 |
 | DMG 打包分发 | 待启动 | venvstacks + 代码签名 |
 

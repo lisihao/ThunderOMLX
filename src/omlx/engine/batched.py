@@ -27,6 +27,16 @@ except ImportError:
     HAS_HARMONY_ADAPTER = False
     preprocess_harmony_messages = None  # type: ignore
 
+# Optional U-Shape Reinforcement import
+try:
+    from ..ushape import UShapeAugmenter, UShapeConfig
+
+    HAS_USHAPE = True
+except ImportError:
+    HAS_USHAPE = False
+    UShapeAugmenter = None  # type: ignore
+    UShapeConfig = None  # type: ignore
+
 
 class BatchedEngine(BaseEngine):
     """
@@ -43,6 +53,7 @@ class BatchedEngine(BaseEngine):
         scheduler_config: Any | None = None,
         stream_interval: int = 1,
         enable_thinking: bool | None = None,
+        ushape_config: Any | None = None,
     ):
         """
         Initialize the batched engine.
@@ -53,6 +64,7 @@ class BatchedEngine(BaseEngine):
             scheduler_config: Optional scheduler configuration
             stream_interval: Tokens to batch before streaming (1=every token)
             enable_thinking: Enable thinking mode for reasoning models (passed to chat_template_kwargs)
+            ushape_config: Optional UShapeConfig for U-Shape Reinforcement
         """
         self._model_name = model_name
         self._trust_remote_code = trust_remote_code
@@ -64,6 +76,12 @@ class BatchedEngine(BaseEngine):
         self._tokenizer = None
         self._engine = None
         self._loaded = False
+
+        # Initialize U-Shape augmenter if configured and available
+        self._ushape_augmenter = None
+        if ushape_config is not None and HAS_USHAPE:
+            self._ushape_augmenter = UShapeAugmenter(ushape_config)
+            logger.info("U-Shape Reinforcement enabled")
 
     @property
     def model_name(self) -> str:
@@ -406,6 +424,7 @@ class BatchedEngine(BaseEngine):
                     system_prompt_hash=output.system_prompt_hash,
                     time_to_first_token=output.time_to_first_token,
                     generation_duration=output.generation_duration,
+                    prefill_progress=output.prefill_progress,
                 )
         except GeneratorExit:
             # Client disconnected
@@ -454,6 +473,10 @@ class BatchedEngine(BaseEngine):
 
         # Preprocess messages for Harmony (gpt-oss) models
         messages = self._preprocess_messages(messages)
+
+        # U-Shape Reinforcement: append context summary to prompt tail
+        if self._ushape_augmenter:
+            messages = self._ushape_augmenter.augment_messages(messages)
 
         # Convert tools for template
         template_tools = convert_tools_for_template(tools) if tools else None
@@ -513,6 +536,10 @@ class BatchedEngine(BaseEngine):
 
         # Preprocess messages for Harmony (gpt-oss) models
         messages = self._preprocess_messages(messages)
+
+        # U-Shape Reinforcement: append context summary to prompt tail
+        if self._ushape_augmenter:
+            messages = self._ushape_augmenter.augment_messages(messages)
 
         # Convert tools for template
         template_tools = convert_tools_for_template(tools) if tools else None

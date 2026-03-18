@@ -1155,6 +1155,9 @@ class Scheduler:
         self.request_id_to_uid: Dict[str, int] = {}
         self.uid_to_request_id: Dict[int, str] = {}
 
+        # External callback for prefill progress (set by EngineCore)
+        self._external_progress_callback: Optional[Callable] = None
+
         # BatchGenerator - the actual batching engine
         self.batch_generator: Optional[BatchGenerator] = None
         self._current_sampler_params: Optional[Tuple] = None
@@ -1920,6 +1923,9 @@ class Scheduler:
         )
         bg._memory_limit_bytes = self._memory_limit_bytes
         bg._memory_hard_limit_bytes = self._memory_hard_limit_bytes
+        # Inject external progress callback for prefill streaming
+        if self._external_progress_callback:
+            bg.prompt_progress_callback = self._external_progress_callback
         return bg
 
     def _build_sampler_and_processors(
@@ -2625,6 +2631,14 @@ class Scheduler:
             return [], None
 
         return extracted, model_cache_config
+
+    def set_progress_callback(self, callback: Callable) -> None:
+        """Register an external callback for prefill progress events.
+
+        Called by EngineCore to receive progress during long prefill operations.
+        The callback receives [(uid, processed_tokens, total_tokens), ...].
+        """
+        self._external_progress_callback = callback
 
     def add_request(self, request: Request) -> None:
         """

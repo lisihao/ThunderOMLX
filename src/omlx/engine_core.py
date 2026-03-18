@@ -15,6 +15,7 @@ The design follows vLLM's engine architecture adapted for MLX.
 import asyncio
 import concurrent.futures
 import logging
+import queue
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -127,6 +128,12 @@ class EngineCore:
         # from different engine threads cause segfaults. See issue #85.
         self._mlx_executor = get_mlx_executor()
 
+        # Thread-safe queue for prefill progress events (executor -> event loop)
+        self._prefill_progress_queue: queue.Queue = queue.Queue(maxsize=500)
+
+        # Register prefill progress callback
+        self.scheduler.set_progress_callback(self._on_prefill_progress)
+
         logger.debug(f"Engine {self._engine_id} initialized")
 
     async def start(self) -> None:
@@ -155,6 +162,38 @@ class EngineCore:
         """Check if engine is running."""
         return self._running
 
+    def _on_prefill_progress(self, progress_list: list) -> None:
+        """Receive prefill progress from executor thread (thread-safe).
+
+        Called by BatchGenerator.prompt_progress_callback during prefill.
+        Writes progress events to queue for the engine loop to drain.
+        """
+        for uid, processed, total in progress_list:
+            rid = self.scheduler.uid_to_request_id.get(uid)
+            if not rid:
+                continue
+            event = RequestOutput(
+                request_id=rid,
+                finished=False,
+                prefill_progress={"processed_tokens": processed, "total_tokens": total},
+            )
+            try:
+                self._prefill_progress_queue.put_nowait(event)
+            except queue.Full:
+                pass  # Non-critical, drop oldest progress
+
+    def _drain_prefill_progress(self) -> None:
+        """Drain progress queue and dispatch to output collectors."""
+        collectors = self._output_collectors
+        while True:
+            try:
+                event = self._prefill_progress_queue.get_nowait()
+            except queue.Empty:
+                break
+            collector = collectors.get(event.request_id)
+            if collector is not None:
+                collector.put(event)
+
     async def _engine_loop(self) -> None:
         """Main engine loop - runs scheduler steps on the MLX executor.
 
@@ -172,9 +211,20 @@ class EngineCore:
         while self._running:
             try:
                 if self.scheduler.has_requests():
-                    output = await loop.run_in_executor(
+                    step_future = loop.run_in_executor(
                         self._mlx_executor, self.scheduler.step
                     )
+                    # Poll for prefill progress while step is running
+                    while True:
+                        try:
+                            output = await asyncio.wait_for(
+                                asyncio.shield(step_future), timeout=0.05
+                            )
+                            break  # Step completed
+                        except asyncio.TimeoutError:
+                            self._drain_prefill_progress()
+                    # Final drain after step completes
+                    self._drain_prefill_progress()
                     self._steps_executed += 1
 
                     # Fast path: distribute outputs to collectors

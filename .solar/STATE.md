@@ -1,6 +1,6 @@
 # ThunderOMLX - Mac mini 最强推理引擎
 
-**最后更新**: 2026-03-17 10:40
+**最后更新**: 2026-03-17 14:30
 **当前阶段**: P2 Prefix Caching 完成，进入 P3 后续优化
 
 ## Mission
@@ -38,6 +38,47 @@
 - ✅ 必须有明确的回滚方案
 
 ## Current Plan
+
+### 🚀 P2.5 智能分块四阶段优化 (2026-03-17 ~)
+
+**状态**: 🔄 **Phase 3 完成, Phase 4 待做**
+**来源**: 三专家会审 (稳健派+探索派+智囊) + ContextPilot 论文研究
+**前置成果**: P2.4 智能分块 128K 验证通过 (305.1 tok/s, 质量 98.17%)
+
+#### Phase 1: Cache-Aligned Chunking — ✅ 完成（放弃对齐）
+- **结论**: 经外部专家诊断，MLX 的 step=256 是内存分配器增长步长（realloc 粒度），不是 vLLM 式 PagedAttention block boundary。对齐到 256 倍数对 MLX 无性能收益。
+- **实施**: 保留 align_mode 功能开关（"none"|"soft"|"hard"），默认 "none"（纯语义分块）
+- 修改: dynamic_chunker.py, intelligent_chunker.py, test_cache_aligned_chunking.py
+- 14/14 测试通过
+
+#### Phase 2: U-Shape Reinforcement (+5-15% 质量, LOW risk) — ✅ 完成
+- ✅ BM25 识别 top-K query 相关 chunks（bm25s + mixed_tokenize 支持中英文）
+- ✅ 抽取式摘要追加到 prompt 尾部（U-curve 高注意力区域）
+- ✅ 不重排原文档（保护 prefix cache）
+- ✅ Fail-safe: 异常时返回原始 messages 不变
+- 新建模块: `src/omlx/ushape/` (5 文件, 477 行)
+- 集成: `batched.py` chat()/stream_chat() 中调用
+- 全部验证通过: import、BM25 中英评分、E2E pipeline、不可变性、边界情况
+
+#### Phase 3: Prefill Progress Streaming (-80% 感知 TTFT, LOW risk) — ✅ 完成
+- ✅ 架构选择: Prefill Progress Streaming（非真 decode 交错，因 MLX KV Cache 不支持中断恢复）
+- ✅ 线程安全 queue.Queue (maxsize=500) 桥接 executor→event loop
+- ✅ Engine loop 50ms polling: asyncio.shield + wait_for 替代阻塞 run_in_executor
+- ✅ SSE 扩展字段: `delta.prefill_progress = {processed_tokens, total_tokens}`
+- ✅ Scheduler callback 注册: set_progress_callback() + bg.prompt_progress_callback 覆盖
+- ✅ Anthropic/Responses API: 静默跳过进度事件
+- ✅ 6/6 测试通过
+- 修改: engine_core.py (~40行), scheduler.py (~10行), request.py (~3行), server.py (~15行), base.py, batched.py
+- 新建: tests/test_prefill_progress.py (6 测试)
+
+#### ~~Phase 4: Qwen3.5 Hybrid Prefix Cache Reuse 调查~~ — ❌ 废弃
+- 监护人决定废弃，不再调查
+
+#### ~~Phase 2 (原): Cache-Aware Adaptive Chunking~~ — ⏸️ Blocked
+- Blocked on Phase 4 (hybrid prefix cache 修复)
+- Chunker 感知 cache 状态的前提是 prefix cache 能复用
+
+---
 
 ### 🎉 P2 Prefix Caching 完成 (2026-03-17)
 
@@ -250,6 +291,18 @@
 
 ## Decisions
 
+- [2026-03-17] **放弃 MLX 路径的 256 block 对齐 (Option C)**
+  - **背景**: P2.5 Phase 1 实现 cache-aligned chunking，将语义边界 snap 到 256 倍数
+  - **问题**: 对齐导致 semantic drift（p50=111, p90>200 tokens），且经专家诊断无性能收益
+  - **专家诊断要点**:
+    1. MLX KVCache step=256 是 realloc 增长粒度，不是 vLLM PagedAttention block boundary
+    2. MLX prefix cache 复用是 token-level，不是 block-level，对齐无收益
+    3. Qwen3.5 混合架构 (KVCache + ArraysCache) 的 prefix reuse 在 MLX 上本身 broken
+    4. Sequential chunked prefill 中 chunk 边界对模型不可见（causal attention），drift 是伪问题
+  - **决策**: 生产 Option C（纯语义分块），架构 Option D（语义边界与物理缓存解耦）
+  - **保留**: align_mode 功能开关，未来 paged KV 场景可用 "hard"/"soft"
+
+
 - [2026-03-15] **Benchmark vs 直接测试性能差距根因分析** ✅ **根因确认**
   - **测试配置**: pp8192/tg128, Qwen3.5-35B-A3B (4-bit), M4 Pro 48GB
   - **直接测试** (test_profiling.py):
@@ -431,6 +484,32 @@
 (无)
 
 ### Done
+
+- ✅ **oMLX 启动参数配置规整输出** (2026-03-17)
+  - 添加 `_print_startup_config()` 到 cli.py，输出 [SECTION] key=value 格式
+  - 覆盖 [SERVER], [MODEL], [SCHEDULER], [CACHE], [OPTIMIZATION], [MCP], [AUTH] 全部配置段
+  - API key 自动掩码（***）
+  - 可被后续工具读取校验是否使用了最优配置
+  - 3/3 测试通过
+
+- ✅ **P2.5 Phase 2: U-Shape Reinforcement 实现** (2026-03-17)
+  - 新建 `src/omlx/ushape/` 模块（5 文件, 477 行）
+  - types.py: UShapeConfig, ScoredChunk 数据类型
+  - bm25_scorer.py: mixed_tokenize（中文字符级+英文词级）+ BM25 评分
+  - extractor.py: 抽取式摘要（句子级 BM25 二次评分）
+  - augmenter.py: UShapeAugmenter 主编排器（query 提取→分块→评分→摘要→注入）
+  - 集成 batched.py: chat()/stream_chat() 中 _preprocess_messages 之后调用
+  - Fail-safe: 全程 try/except，异常返回原始 messages
+  - 不可变: deep copy messages，不修改原始输入
+  - 全部验证通过（import、BM25 中英评分、E2E pipeline、不可变性、边界情况）
+
+- ✅ **P2.5 Phase 1: Cache-Aligned Chunking 诊断与收尾** (2026-03-17)
+  - 实现 cache alignment 功能后，发现 drift 严重（p50=111, p90>200 tokens）
+  - 外部专家诊断：MLX step=256 是分配器增长步长，非 block boundary；prefix cache 是 token-level；Qwen3.5 hybrid prefix reuse 在 MLX 上 broken
+  - **决策**: Option C — 放弃 256 对齐，保持纯语义分块
+  - 保留 align_mode 功能开关（未来 paged KV 场景可启用）
+  - 14/14 测试通过
+
 
 - ✅ **Phase 7: P2 Prefix Caching 优化** (2026-03-17) ⭐⭐⭐
   - ✅ **性能突破**: -90.6% TTFT (530ms → 50ms)，超预期 40.6%

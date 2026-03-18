@@ -248,6 +248,9 @@ class RequestOutput:
     generation_duration: float = 0.0
     # Error message (set when engine encounters an unrecoverable error)
     error: Optional[str] = None
+    # Prefill progress (streamed during long prompt processing)
+    # Format: {"processed_tokens": int, "total_tokens": int}
+    prefill_progress: Optional[Dict[str, int]] = None
 
     @property
     def usage(self) -> Dict[str, int]:

@@ -3,8 +3,12 @@
 
 核心算法：Greedy Boundary-Aware Packing
 在保持语义完整性的前提下，最大化 chunk size 利用率
+
+Phase 2.5-1: Cache-Aligned Chunking
+将 chunk 边界 snap 到 KV Cache block_size 倍数，消除碎片块
 """
 
+import math
 from typing import List, Optional
 from .types import Boundary, Chunk, ContentType
 
@@ -16,6 +20,8 @@ class DynamicChunker:
         self,
         target_size: int = 4096,
         flexibility: float = 0.125,  # ±12.5%
+        block_size: int = 256,  # KV Cache block size (保留参数，默认不启用对齐)
+        align_mode: str = "none",  # none | soft | hard
     ):
         """
         初始化动态分块器
@@ -23,9 +29,16 @@ class DynamicChunker:
         Args:
             target_size: 目标 chunk size
             flexibility: 弹性范围（相对于 target_size 的比例）
+            block_size: KV Cache 块大小（保留，用于未来 paged KV 场景）
+            align_mode: 对齐模式
+                - "none": 不对齐（默认，MLX token-level cache 无需对齐）
+                - "soft": 仅 drift < block_size/4 时对齐
+                - "hard": 强制对齐到 block_size 倍数
         """
         self.target_size = target_size
         self.flexibility = flexibility
+        self.block_size = block_size
+        self.align_mode = align_mode
 
         # 计算弹性范围
         flex_tokens = int(target_size * flexibility)
@@ -87,6 +100,21 @@ class DynamicChunker:
             else:
                 # 无边界：使用理想点
                 chunk_end = ideal_end
+
+            # 3.5 Cache 对齐（默认关闭，MLX 是 token-level cache，不需要 block 对齐）
+            if self.align_mode == "hard":
+                chunk_end = self._align_to_block_boundary(
+                    chunk_end, current_start, min_size, max_size
+                )
+            elif self.align_mode == "soft":
+                aligned = self._align_to_block_boundary(
+                    chunk_end, current_start, min_size, max_size
+                )
+                if abs(aligned - chunk_end) <= self.block_size // 4:
+                    chunk_end = aligned
+
+            # 确保不超过 token 序列末尾
+            chunk_end = min(chunk_end, len(tokens))
 
             # 4. 创建 chunk
             chunk = Chunk(
@@ -162,16 +190,72 @@ class DynamicChunker:
             return None
 
         # 计算每个候选边界的得分
-        # 得分 = 边界强度 * 1000 - 距离理想点的距离
+        # 得分 = 语义强度 - 距离惩罚（+ 可选 Cache 对齐 bonus）
         def score(b: Boundary) -> float:
             strength_score = b.strength * 1000  # 强度权重
             distance_penalty = abs(b.token_offset - ideal)  # 距离惩罚
-            return strength_score - distance_penalty
+
+            # Cache 对齐 bonus：仅在启用对齐模式时生效
+            # MLX 是 token-level cache，默认不需要 block 对齐
+            alignment_bonus = 0.0
+            if self.align_mode != "none":
+                relative = b.token_offset - chunk_start
+                remainder = relative % self.block_size
+                alignment_distance = min(remainder, self.block_size - remainder)
+                normalized = alignment_distance / (self.block_size / 2)
+                alignment_bonus = (1.0 - normalized) * 250
+
+            return strength_score - distance_penalty + alignment_bonus
 
         # 选择得分最高的边界
         candidates.sort(key=score, reverse=True)
 
         return candidates[0]
+
+    def _align_to_block_boundary(
+        self,
+        chunk_end: int,
+        current_start: int,
+        min_size: int,
+        max_size: int
+    ) -> int:
+        """
+        将 chunk_end 对齐到 block_size 倍数
+
+        优先向上对齐（包含更多 token，减少碎片块）。
+        如果向上对齐超过 max_size，则向下对齐。
+        如果都不满足约束，保持原值。
+
+        Args:
+            chunk_end: 当前 chunk 结束位置
+            current_start: 当前 chunk 起始位置
+            min_size: 最小允许大小
+            max_size: 最大允许大小
+
+        Returns:
+            int: 对齐后的结束位置
+        """
+        if self.block_size <= 1:
+            return chunk_end  # block_size=1 时不对齐
+
+        # 相对于 current_start 计算对齐
+        relative_end = chunk_end - current_start
+
+        # 向上对齐到 block_size 倍数
+        aligned_up = math.ceil(relative_end / self.block_size) * self.block_size
+        # 向下对齐到 block_size 倍数
+        aligned_down = (relative_end // self.block_size) * self.block_size
+
+        # 优先向上对齐，不超过 max_size
+        if aligned_up <= max_size:
+            return aligned_up + current_start
+
+        # 否则向下对齐，不低于 min_size
+        if aligned_down >= min_size:
+            return aligned_down + current_start
+
+        # 兜底：无法在范围内对齐，保持原值
+        return chunk_end
 
     def chunk_fixed(
         self,

@@ -41,6 +41,94 @@ def _has_cli_overrides(args) -> bool:
     return False
 
 
+def _format_bytes(n: int) -> str:
+    """Format byte count as human-readable string."""
+    if n <= 0:
+        return "0"
+    if n >= 1024 ** 3:
+        return f"{n / (1024**3):.1f}GB"
+    if n >= 1024 ** 2:
+        return f"{n / (1024**2):.1f}MB"
+    if n >= 1024:
+        return f"{n / 1024:.1f}KB"
+    return f"{n}B"
+
+
+def _print_startup_config(settings, scheduler_config, model_dirs, mcp_config):
+    """
+    Print structured startup configuration.
+
+    Output format: [SECTION] key=value
+    Machine-readable for later verification of optimal config.
+    """
+    sep = "=" * 60
+
+    print(f"\n{sep}")
+    print(f"  oMLX Startup Configuration")
+    print(f"{sep}")
+
+    # [SERVER] section
+    print(f"\n[SERVER]")
+    print(f"  base_path              = {settings.base_path}")
+    print(f"  host                   = {settings.server.host}")
+    print(f"  port                   = {settings.server.port}")
+    print(f"  log_level              = {settings.server.log_level}")
+
+    # [MODEL] section
+    print(f"\n[MODEL]")
+    print(f"  model_dirs             = {', '.join(str(d) for d in model_dirs)}")
+    print(f"  max_model_memory       = {settings.model.max_model_memory}")
+    print(f"  max_process_memory     = {settings.memory.max_process_memory}")
+
+    # [SCHEDULER] section
+    print(f"\n[SCHEDULER]")
+    print(f"  max_num_seqs           = {scheduler_config.max_num_seqs}")
+    print(f"  max_num_batched_tokens = {scheduler_config.max_num_batched_tokens}")
+    print(f"  completion_batch_size  = {scheduler_config.completion_batch_size}")
+    print(f"  prefill_step_size      = {scheduler_config.prefill_step_size}")
+    print(f"  policy                 = {scheduler_config.policy.value if hasattr(scheduler_config.policy, 'value') else scheduler_config.policy}")
+
+    # [CACHE] section
+    cache_enabled = scheduler_config.paged_ssd_cache_dir is not None
+    cache_mode = "disabled"
+    if cache_enabled:
+        cache_mode = "paged_ssd"
+        if scheduler_config.hot_cache_max_size > 0:
+            cache_mode = "paged_ssd + hot_cache"
+
+    print(f"\n[CACHE]")
+    print(f"  mode                   = {cache_mode}")
+    print(f"  paged_cache_block_size = {scheduler_config.paged_cache_block_size}")
+    print(f"  initial_cache_blocks   = {scheduler_config.initial_cache_blocks}")
+    print(f"  max_cache_blocks       = {scheduler_config.max_cache_blocks or 'auto'}")
+    if cache_enabled:
+        print(f"  ssd_cache_dir          = {scheduler_config.paged_ssd_cache_dir}")
+        print(f"  ssd_cache_max_size     = {_format_bytes(scheduler_config.paged_ssd_cache_max_size)}")
+        print(f"  hot_cache_max_size     = {_format_bytes(scheduler_config.hot_cache_max_size)}")
+
+    # [OPTIMIZATION] section
+    print(f"\n[OPTIMIZATION]")
+    print(f"  disable_block_enlargement     = {scheduler_config.disable_block_size_enlargement}")
+    print(f"  arrays_cache_target_block     = {scheduler_config.arrays_cache_target_block_size or 'auto'}")
+    print(f"  enable_prompt_padding         = {scheduler_config.enable_prompt_padding}")
+    print(f"  max_padding_tokens            = {scheduler_config.max_padding_tokens}")
+    print(f"  enable_adaptive_cache_optim   = {scheduler_config.enable_adaptive_cache_optimization}")
+    print(f"  gc_cleanup_interval           = {scheduler_config.gc_cleanup_interval}")
+    print(f"  mlx_cache_cleanup_interval    = {scheduler_config.mlx_cache_cleanup_interval}")
+
+    # [MCP] section (if configured)
+    if mcp_config:
+        print(f"\n[MCP]")
+        print(f"  config_path            = {mcp_config}")
+
+    # [AUTH] section
+    has_auth = bool(settings.auth.api_key)
+    print(f"\n[AUTH]")
+    print(f"  api_key                = {'***' if has_auth else 'none'}")
+
+    print(f"\n{sep}\n")
+
+
 def serve_command(args):
     """Start the OpenAI-compatible multi-model server."""
     import logging
@@ -129,16 +217,11 @@ def serve_command(args):
     from .config import parse_size
 
     model_dirs = settings.model.get_model_dirs(settings.base_path)
-    print(f"Base path: {settings.base_path}")
-    print(f"Model directories: {', '.join(str(d) for d in model_dirs)}")
-    print(f"Max model memory: {settings.model.max_model_memory}")
-    print(f"Max process memory: {settings.memory.max_process_memory}")
 
     # Store MCP config path for FastAPI startup
     # Priority: CLI arg > settings.json
     mcp_config = args.mcp_config or settings.mcp.config_path
     if mcp_config:
-        print(f"MCP config: {mcp_config}")
         os.environ["OMLX_MCP_CONFIG"] = mcp_config
 
     # Determine paged SSD cache directory
@@ -182,18 +265,8 @@ def serve_command(args):
     else:
         scheduler_config.hot_cache_max_size = 0
 
-    if args.no_cache:
-        print("Mode: Multi-model serving (no oMLX cache, mlx-lm BatchGenerator only)")
-    elif paged_ssd_cache_dir:
-        print("Mode: Multi-model serving (continuous batching + paged SSD cache)")
-        # Format cache size for display
-        cache_max_size_display = f"{cache_max_size_bytes / (1024**3):.1f}GB"
-        print(f"paged SSD cache: {paged_ssd_cache_dir} (max: {cache_max_size_display})")
-        if scheduler_config.hot_cache_max_size > 0:
-            hot_display = f"{scheduler_config.hot_cache_max_size / (1024**3):.1f}GB"
-            print(f"Hot cache: {hot_display} (in-memory)")
-    else:
-        print("Mode: Multi-model serving (continuous batching, no cache)")
+    # --- Structured Config Output ---
+    _print_startup_config(settings, scheduler_config, model_dirs, mcp_config)
 
     # Initialize server
     # Note: pinned_models and default_model are managed via admin page (model_settings.json)

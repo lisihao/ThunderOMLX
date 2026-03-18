@@ -5,7 +5,7 @@ Base engine interface for oMLX inference.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
 
 @dataclass
@@ -35,6 +35,9 @@ class GenerationOutput:
     # Timing (seconds, from scheduler)
     time_to_first_token: float = 0.0
     generation_duration: float = 0.0
+    # Prefill progress (streamed during long prompt processing)
+    # Format: {"processed_tokens": int, "total_tokens": int}
+    prefill_progress: Optional[Dict[str, int]] = None
 
 
 class BaseEngine(ABC):
