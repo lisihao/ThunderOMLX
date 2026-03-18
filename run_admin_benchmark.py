@@ -47,7 +47,7 @@ async def main():
     model_id = model_path.name  # "qwen3.5-35b-mlx"
     request = BenchmarkRequest(
         model_id=model_id,
-        prompt_lengths=[8192],
+        prompt_lengths=[1024, 4096, 8192, 16384, 32768],
         generation_length=128,
         batch_sizes=[],
         include_image=False
@@ -74,12 +74,16 @@ async def main():
         print("✅ Benchmark 完成")
         print("="*80)
 
-        # 从 results 列表中提取结果
+        # 显示所有结果
         if run.results:
-            result = run.results[0]  # 第一个结果
-            print(f"⏱️  TTFT: {result.get('ttft_ms', 0):.1f}ms")
-            print(f"⚡ Generation TPS: {result.get('gen_tps', 0):.1f} tok/s")
-            print(f"📊 Processing TPS: {result.get('processing_tps', 0):.1f} tok/s")
+            print(f"\n{'PP':>8} {'TG tok/s':>10} {'PP tok/s':>10} {'TTFT ms':>10}")
+            print("-" * 42)
+            for result in run.results:
+                pp = result.get('pp', 0)
+                gen_tps = result.get('gen_tps', 0)
+                proc_tps = result.get('processing_tps', 0)
+                ttft = result.get('ttft_ms', 0)
+                print(f"{pp:>8} {gen_tps:>10.1f} {proc_tps:>10.1f} {ttft:>10.1f}")
         else:
             print("⚠️  没有结果数据")
 

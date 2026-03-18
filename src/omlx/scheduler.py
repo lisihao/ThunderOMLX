@@ -114,12 +114,16 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
         self,
         *args: Any,
         boundary_block_size: int = 0,
+        boundary_snapshot_stride: int = 1,
         prefill_boundary_callback: Optional[Callable[[int, List[Any], int], None]] = None,
         abort_check_callback: Optional[Callable[[List[int]], List[int]]] = None,
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
         self._boundary_block_size = max(0, int(boundary_block_size))
+        # Snapshot stride: capture every N-th block boundary.
+        # Effective snapshot interval = block_size * stride.
+        self._boundary_snapshot_stride = max(1, int(boundary_snapshot_stride))
         self._prefill_boundary_callback = prefill_boundary_callback
         self._abort_check_callback = abort_check_callback
         # Memory limits for inline prefill checking (set by Scheduler).
@@ -233,10 +237,11 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
                 continue
 
             if all_boundaries and block_size > 0:
-                # Stop at the NEXT block boundary (not just the final target).
-                # This ensures boundary snapshots are captured at every block
-                # boundary for hybrid models (ArraysCache + KVCache).
-                next_boundary = ((current_total // block_size) + 1) * block_size
+                # Stop at the NEXT snapshot boundary (stride-aligned).
+                # With stride=1, this is every block boundary (legacy).
+                # With stride=8, this is every 2048 tokens (default).
+                effective_block = block_size * self._boundary_snapshot_stride
+                next_boundary = ((current_total // effective_block) + 1) * effective_block
                 next_boundary = min(next_boundary, target_boundary)
                 delta = (next_boundary - base) - processed_tokens
             else:
@@ -282,7 +287,8 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
                 prefill_done = min(processed_tokens, max(length - 1, 0))
                 total_tokens = base + prefill_done
 
-            if total_tokens <= 0 or total_tokens % self._boundary_block_size != 0:
+            effective_block = self._boundary_block_size * self._boundary_snapshot_stride
+            if total_tokens <= 0 or total_tokens % effective_block != 0:
                 continue
             if emitted.get(uid, -1) >= total_tokens:
                 continue
@@ -1009,6 +1015,13 @@ class SchedulerConfig:
     # Skip Logic testing flag (disable ArraysCache block_size auto-enlargement)
     # When True, allows testing Skip Logic with small block sizes on ArraysCache models
     disable_block_size_enlargement: bool = True  # ⚡ 默认禁用 ArraysCache 自动提升，保持 block_size=256 以支持短 prompt 缓存
+
+    # Boundary snapshot stride: how many block_size intervals between snapshots.
+    # Higher stride = larger prefill chunks = faster PP, but coarser cache reuse.
+    # 0 = auto (align with prefill_step_size / block_size, typically 8)
+    # 1 = every block boundary (finest granularity, slowest PP — legacy behavior)
+    # 8 = every 2048 tokens (matches default prefill_step_size, fastest PP)
+    boundary_snapshot_stride: int = 0
 
     # ⚡ 方案 2: 动态 block_size 选择（根据使用场景）
     # ArraysCache 模型的目标 block_size（替代固定的 1024）
@@ -1904,6 +1917,12 @@ class Scheduler:
         if sampling_params.stop_token_ids:
             stop_tokens.update(sampling_params.stop_token_ids)
 
+        # Compute effective snapshot stride.
+        # stride=0 means auto: align with prefill_step_size / block_size.
+        stride = self.config.boundary_snapshot_stride
+        if stride <= 0 and self.config.paged_cache_block_size > 0:
+            stride = max(1, self.config.prefill_step_size // self.config.paged_cache_block_size)
+
         bg = _BoundarySnapshotBatchGenerator(
             model=self.model,
             max_tokens=sampling_params.max_tokens,
@@ -1914,6 +1933,7 @@ class Scheduler:
             completion_batch_size=self.config.completion_batch_size,
             prefill_step_size=self.config.prefill_step_size,
             boundary_block_size=self.config.paged_cache_block_size,
+            boundary_snapshot_stride=stride,
             prefill_boundary_callback=(
                 self._on_prefill_boundary_snapshot
                 if self.block_aware_cache is not None
