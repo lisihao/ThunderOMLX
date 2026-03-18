@@ -400,7 +400,8 @@ class BatchedEngine(BaseEngine):
         finished_normally = False
         try:
             async for output in self._engine.stream_outputs(request_id):
-                text = clean_special_tokens(output.output_text)
+                # Only apply regex cleaning on final output to avoid per-token overhead
+                text = clean_special_tokens(output.output_text) if output.finished else output.output_text
 
                 # Set finished_normally BEFORE yield, because the consumer
                 # may stop iterating after receiving the final output,

@@ -1,7 +1,7 @@
 # ThunderOMLX - Mac mini 最强推理引擎
 
-**最后更新**: 2026-03-17 14:30
-**当前阶段**: P2 Prefix Caching 完成，进入 P3 后续优化
+**最后更新**: 2026-03-18 06:20
+**当前阶段**: P2.5 完成 + 性能修复
 
 ## Mission
 
@@ -63,11 +63,12 @@
 #### Phase 3: Prefill Progress Streaming (-80% 感知 TTFT, LOW risk) — ✅ 完成
 - ✅ 架构选择: Prefill Progress Streaming（非真 decode 交错，因 MLX KV Cache 不支持中断恢复）
 - ✅ 线程安全 queue.Queue (maxsize=500) 桥接 executor→event loop
-- ✅ Engine loop 50ms polling: asyncio.shield + wait_for 替代阻塞 run_in_executor
+- ✅ Background drain task: 独立 asyncio task 每 50ms drain 进度队列 (零 decode 开销)
 - ✅ SSE 扩展字段: `delta.prefill_progress = {processed_tokens, total_tokens}`
 - ✅ Scheduler callback 注册: set_progress_callback() + bg.prompt_progress_callback 覆盖
 - ✅ Anthropic/Responses API: 静默跳过进度事件
 - ✅ 6/6 测试通过
+- ⚠️ **v0.3.0 已知问题修复**: 原 inline polling (asyncio.shield+wait_for) 对每个 decode step 有开销，已改为 background drain task + 直接 await run_in_executor (零开销)
 - 修改: engine_core.py (~40行), scheduler.py (~10行), request.py (~3行), server.py (~15行), base.py, batched.py
 - 新建: tests/test_prefill_progress.py (6 测试)
 

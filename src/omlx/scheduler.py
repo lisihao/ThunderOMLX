@@ -1004,7 +1004,7 @@ class SchedulerConfig:
 
     # GC/cleanup settings (memory optimization)
     gc_cleanup_interval: int = 0  # Steps between gc.collect() calls (0=disabled)
-    mlx_cache_cleanup_interval: int = 32  # Steps between mx.clear_cache() calls
+    mlx_cache_cleanup_interval: int = 256  # Steps between mx.clear_cache() calls (upstream default 512)
 
     # Skip Logic testing flag (disable ArraysCache block_size auto-enlargement)
     # When True, allows testing Skip Logic with small block sizes on ArraysCache models
@@ -3459,17 +3459,21 @@ class Scheduler:
             if request.num_output_tokens == 1 and request._first_token_time == 0.0:
                 request._first_token_time = time.perf_counter()
 
-            # Compute timing for TPS reporting
-            now = time.perf_counter()
-            ttft = (request._first_token_time - request._submit_time) if request._first_token_time > 0 and request._submit_time > 0 else 0.0
-            gen_dur = (now - request._first_token_time) if request._first_token_time > 0 else 0.0
+            # Compute timing: full computation only on first token or finish
+            if is_finished or request.num_output_tokens == 1:
+                now = time.perf_counter()
+                ttft = (request._first_token_time - request._submit_time) if request._first_token_time > 0 and request._submit_time > 0 else 0.0
+                gen_dur = (now - request._first_token_time) if request._first_token_time > 0 else 0.0
+            else:
+                ttft = 0.0
+                gen_dur = 0.0
 
             # Create output
             output = RequestOutput(
                 request_id=request_id,
                 new_token_ids=[response.token] if not is_stop else [],
                 new_text=new_text,
-                output_token_ids=list(request.output_token_ids),
+                output_token_ids=list(request.output_token_ids) if is_finished else [],
                 prompt_tokens=request.num_prompt_tokens,
                 completion_tokens=request.num_output_tokens,
                 cached_tokens=request.reported_cached_tokens or request.cached_tokens,
@@ -3889,7 +3893,7 @@ class Scheduler:
             logger.info(f"Rescheduled {count} requests for re-prefill")
         return failed_ids
 
-    def step(self) -> SchedulerOutput:
+    def step(self, defer_cleanup: bool = False) -> SchedulerOutput:
         """
         Execute one scheduling step with automatic error recovery.
 
@@ -3899,6 +3903,12 @@ class Scheduler:
         3. Processes outputs and handles finished requests
         4. On cache corruption: clears all cache and reschedules requests
            for re-prefill (no error raised to caller)
+
+        Args:
+            defer_cleanup: If True, skip _cleanup_finished so the caller
+                can distribute outputs before running the expensive
+                synchronize + cache storage. The caller MUST call
+                _cleanup_finished(output.finished_request_ids) afterward.
 
         Returns:
             SchedulerOutput with results of this step
@@ -3927,7 +3937,8 @@ class Scheduler:
                     outputs, finished_ids = self._process_batch_responses(responses)
                     output.outputs = outputs
                     output.finished_request_ids = finished_ids
-                    self._cleanup_finished(finished_ids)
+                    if not defer_cleanup:
+                        self._cleanup_finished(finished_ids)
 
         except _PrefillAbortedError:
             # Prefill was interrupted by a pending abort.

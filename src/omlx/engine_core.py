@@ -16,6 +16,7 @@ import asyncio
 import concurrent.futures
 import logging
 import queue
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -30,16 +31,20 @@ from .model_registry import get_registry, ModelOwnershipError
 
 logger = logging.getLogger(__name__)
 
-_global_mlx_executor: concurrent.futures.ThreadPoolExecutor | None = None
+_global_mlx_executor: Optional[concurrent.futures.Executor] = None
 
 
-def get_mlx_executor() -> concurrent.futures.ThreadPoolExecutor:
+def get_mlx_executor() -> concurrent.futures.Executor:
     """Get or create the global MLX executor (lazy singleton).
 
     mlx-lm's BatchGenerator uses a module-level Metal stream
     (generation_stream), so ALL MLX GPU operations across all models
     MUST be serialized onto one thread to prevent Metal command buffer
     races that cause segfaults. See issue #85.
+
+    When an EngineCore is running, this returns an EngineThreadExecutor
+    that routes work through the engine's dedicated thread. Otherwise,
+    it returns a single-thread ThreadPoolExecutor as fallback.
     """
     global _global_mlx_executor
     if _global_mlx_executor is None:
@@ -47,6 +52,42 @@ def get_mlx_executor() -> concurrent.futures.ThreadPoolExecutor:
             max_workers=1, thread_name_prefix="mlx-global"
         )
     return _global_mlx_executor
+
+
+def _set_global_mlx_executor(executor: concurrent.futures.Executor) -> None:
+    """Replace the global MLX executor. Used by EngineCore."""
+    global _global_mlx_executor
+    _global_mlx_executor = executor
+
+
+def _reset_global_mlx_executor() -> None:
+    """Reset global MLX executor to default (lazy re-creation)."""
+    global _global_mlx_executor
+    _global_mlx_executor = None
+
+
+class EngineThreadExecutor(concurrent.futures.Executor):
+    """Executor that routes work through the engine's dedicated thread.
+
+    Compatible with concurrent.futures.Executor so it works as a drop-in
+    replacement with asyncio.loop.run_in_executor(). All submitted work
+    is serialized on the engine thread alongside scheduler.step() calls,
+    maintaining the single-thread MLX safety invariant.
+    """
+
+    def __init__(self, command_queue: queue.Queue):
+        self._command_queue = command_queue
+        self._shutdown = False
+
+    def submit(self, fn, /, *args, **kwargs):
+        if self._shutdown:
+            raise RuntimeError("Executor is shut down")
+        future = concurrent.futures.Future()
+        self._command_queue.put(("execute", fn, args, kwargs, future))
+        return future
+
+    def shutdown(self, wait=True, *, cancel_futures=False):
+        self._shutdown = True
 
 
 @dataclass
@@ -131,24 +172,90 @@ class EngineCore:
         # Thread-safe queue for prefill progress events (executor -> event loop)
         self._prefill_progress_queue: queue.Queue = queue.Queue(maxsize=500)
 
+        # Dedicated engine thread state
+        self._command_queue: queue.Queue = queue.Queue()
+        self._engine_thread: Optional[threading.Thread] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
         # Register prefill progress callback
         self.scheduler.set_progress_callback(self._on_prefill_progress)
 
         logger.debug(f"Engine {self._engine_id} initialized")
 
     async def start(self) -> None:
-        """Start the engine loop."""
+        """Start the engine with a dedicated thread for zero-overhead decode.
+
+        Replaces the old asyncio + run_in_executor pattern with a dedicated
+        engine thread that runs scheduler.step() in a tight loop. This
+        eliminates per-step ThreadPoolExecutor scheduling, Future resolution,
+        and GIL transfer overhead (~3.7ms/step → ~0ms/step).
+        """
         if self._running:
             return
 
         self._running = True
         self._start_time = time.time()
-        self._task = asyncio.create_task(self._engine_loop())
-        logger.info("Engine started")
+        self._loop = asyncio.get_running_loop()
+
+        # Install engine thread executor as the global MLX executor.
+        # All run_in_executor(get_mlx_executor(), ...) calls now route
+        # through the engine thread, maintaining single-thread MLX safety.
+        self._engine_thread_executor = EngineThreadExecutor(self._command_queue)
+        self._mlx_executor = self._engine_thread_executor
+        _set_global_mlx_executor(self._engine_thread_executor)
+
+        # Start dedicated engine thread
+        self._engine_thread = threading.Thread(
+            target=self._engine_thread_func,
+            daemon=True,
+            name=f"omlx-engine-{self._engine_id[:8]}",
+        )
+        self._engine_thread.start()
+
+        self._progress_drain_task = asyncio.create_task(
+            self._prefill_progress_drain_loop()
+        )
+        logger.info("Engine started (dedicated thread mode)")
 
     async def stop(self) -> None:
-        """Stop the engine loop."""
+        """Stop the engine and its dedicated thread."""
         self._running = False
+
+        if hasattr(self, '_progress_drain_task') and self._progress_drain_task:
+            self._progress_drain_task.cancel()
+            try:
+                await self._progress_drain_task
+            except asyncio.CancelledError:
+                pass
+            self._progress_drain_task = None
+
+        # Wait for engine thread to finish
+        if self._engine_thread and self._engine_thread.is_alive():
+            self._engine_thread.join(timeout=5.0)
+            if self._engine_thread.is_alive():
+                logger.warning("Engine thread did not stop within timeout")
+        self._engine_thread = None
+
+        # Drain and cancel any pending commands
+        while True:
+            try:
+                cmd = self._command_queue.get_nowait()
+                if cmd[0] == "execute":
+                    future = cmd[4]
+                    future.cancel()
+                elif cmd[0] == "add_request":
+                    done_event = cmd[2]
+                    self._loop.call_soon_threadsafe(done_event.set)
+            except queue.Empty:
+                break
+
+        # Shutdown engine thread executor and restore global default
+        if hasattr(self, '_engine_thread_executor'):
+            self._engine_thread_executor.shutdown()
+        _reset_global_mlx_executor()
+        self._mlx_executor = get_mlx_executor()
+
+        # Legacy: cancel old asyncio task if it exists
         if self._task:
             self._task.cancel()
             try:
@@ -156,6 +263,7 @@ class EngineCore:
             except asyncio.CancelledError:
                 pass
             self._task = None
+
         logger.info("Engine stopped")
 
     def is_running(self) -> bool:
@@ -194,104 +302,161 @@ class EngineCore:
             if collector is not None:
                 collector.put(event)
 
-    async def _engine_loop(self) -> None:
-        """Main engine loop - runs scheduler steps on the MLX executor.
+    async def _prefill_progress_drain_loop(self) -> None:
+        """Background task that periodically drains prefill progress events.
 
-        All scheduler steps run on _mlx_executor (single-worker thread) to
-        guarantee that MLX GPU operations are never concurrent.  VLM vision
-        encoding also runs on the same executor, so inline scheduler.step()
-        on the event loop would race with vision mx.eval() and segfault.
+        Runs independently from the engine loop so that decode steps
+        have zero overhead.  Progress events are dispatched every 50ms.
         """
-        loop = asyncio.get_running_loop()
+        while self._running:
+            self._drain_prefill_progress()
+            await asyncio.sleep(0.05)
 
+    def _engine_thread_func(self) -> None:
+        """Dedicated engine thread — tight scheduler loop with zero async overhead.
+
+        This replaces the old asyncio _engine_loop + run_in_executor pattern.
+        By running scheduler.step() directly in a dedicated thread, we eliminate
+        per-step overhead from ThreadPoolExecutor scheduling (~0.4ms), Future
+        creation/resolution (~0.3ms), and GIL round-trip transfer (~0.9ms).
+
+        All MLX GPU operations are serialized on this thread. External MLX work
+        (VLM vision encoding, model loading) is routed here via the command queue
+        through EngineThreadExecutor, maintaining Metal stream safety.
+
+        Output distribution happens in the event loop thread via call_soon_threadsafe
+        to safely interact with asyncio.Event-based collectors.
+        """
         step_interval = self.config.step_interval
-        stream_interval = self.config.stream_interval
-        use_simple_streaming = (stream_interval == 1)
+        loop = self._loop
+
+        logger.debug("Engine thread started")
 
         while self._running:
-            try:
-                if self.scheduler.has_requests():
-                    step_future = loop.run_in_executor(
-                        self._mlx_executor, self.scheduler.step
-                    )
-                    # Poll for prefill progress while step is running
-                    while True:
-                        try:
-                            output = await asyncio.wait_for(
-                                asyncio.shield(step_future), timeout=0.05
-                            )
-                            break  # Step completed
-                        except asyncio.TimeoutError:
-                            self._drain_prefill_progress()
-                    # Final drain after step completes
-                    self._drain_prefill_progress()
+            # 1. Process commands from async side (add_request, VLM work, etc.)
+            self._process_thread_commands()
+
+            # 2. Run one scheduler step if work is available
+            if self.scheduler.has_requests():
+                try:
+                    output = self.scheduler.step(defer_cleanup=True)
                     self._steps_executed += 1
 
-                    # Fast path: distribute outputs to collectors
-                    outputs = output.outputs
-                    if outputs:
-                        collectors = self._output_collectors
-                        states = self._stream_states
-                        events = self._finished_events
-
-                        for req_output in outputs:
-                            rid = req_output.request_id
-                            collector = collectors.get(rid)
-
-                            if collector is not None:
-                                # Optimized: skip stream_interval check when interval=1
-                                if use_simple_streaming:
-                                    collector.put(req_output)
-                                else:
-                                    state = states.get(rid)
-                                    if state and state.should_send(
-                                        req_output.completion_tokens,
-                                        req_output.finished
-                                    ):
-                                        collector.put(req_output)
-                                        state.mark_sent(req_output.completion_tokens)
-
-                            if req_output.finished:
-                                event = events.get(rid)
-                                if event:
-                                    event.set()
-                                # Note: cleanup is handled by stream_outputs() finally block
-                                # _delayed_cleanup() was causing double cleanup race condition
-
-                        # Always yield to prevent event loop starvation.
-                        # Without this, orphaned requests (client disconnected but
-                        # request still in scheduler) block the entire event loop,
-                        # making the server unresponsive to all HTTP requests.
-                        await asyncio.sleep(0)
-                else:
-                    # No work, yield control
-                    await asyncio.sleep(step_interval)
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                import traceback
-                logger.error(f"Engine loop error: {e}\n{traceback.format_exc()}")
-                # Fail all requests and remove from scheduler to prevent
-                # infinite loop (has_requests() must return False).
-                failed_ids = await loop.run_in_executor(
-                    self._mlx_executor, self.scheduler.fail_all_requests
-                )
-                for rid in failed_ids:
-                    collector = self._output_collectors.get(rid)
-                    if collector is not None:
-                        collector.put(
-                            RequestOutput(
-                                request_id=rid,
-                                finished=True,
-                                finish_reason="error",
-                                error=str(e),
-                            )
+                    if output.outputs:
+                        # Push outputs to event loop for distribution.
+                        # call_soon_threadsafe is ~0.01ms vs ~1.9ms for
+                        # run_in_executor round-trip.
+                        loop.call_soon_threadsafe(
+                            self._distribute_step_outputs, output.outputs
                         )
-                    event = self._finished_events.get(rid)
-                    if event:
-                        event.set()
-                await asyncio.sleep(0.1)
+
+                    # Run deferred cleanup AFTER outputs are queued for
+                    # distribution. This decouples output delivery from the
+                    # expensive mx.synchronize + SSD cache storage (~466ms
+                    # on the final step). Consumers receive the last token
+                    # immediately instead of waiting for cache storage.
+                    if output.finished_request_ids:
+                        self.scheduler._cleanup_finished(
+                            output.finished_request_ids
+                        )
+                except Exception as e:
+                    import traceback
+                    logger.error(
+                        f"Engine thread error: {e}\n{traceback.format_exc()}"
+                    )
+                    try:
+                        failed_ids = self.scheduler.fail_all_requests()
+                        loop.call_soon_threadsafe(
+                            self._distribute_errors, failed_ids, str(e)
+                        )
+                    except Exception:
+                        pass
+                    time.sleep(0.1)
+            else:
+                # No work — sleep briefly to avoid busy-waiting
+                time.sleep(step_interval)
+
+        logger.debug("Engine thread stopped")
+
+    def _process_thread_commands(self) -> None:
+        """Process commands sent from the asyncio side.
+
+        Handles:
+        - "add_request": add a request to the scheduler
+        - "execute": run arbitrary function (VLM encoding, mx.clear_cache, etc.)
+        """
+        while True:
+            try:
+                cmd = self._command_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            cmd_type = cmd[0]
+            if cmd_type == "execute":
+                _, fn, args, kwargs, future = cmd
+                if future.cancelled():
+                    continue
+                try:
+                    result = fn(*args, **kwargs)
+                    future.set_result(result)
+                except BaseException as e:
+                    try:
+                        future.set_exception(e)
+                    except concurrent.futures.InvalidStateError:
+                        pass  # Future was cancelled
+            elif cmd_type == "add_request":
+                _, request, done_event = cmd
+                self.scheduler.add_request(request)
+                self._loop.call_soon_threadsafe(done_event.set)
+
+    def _distribute_step_outputs(self, outputs: list) -> None:
+        """Distribute step outputs to collectors. Runs in event loop thread.
+
+        Called via call_soon_threadsafe from the engine thread. All collector
+        and asyncio.Event operations are safely executed in the event loop.
+        """
+        collectors = self._output_collectors
+        states = self._stream_states
+        events = self._finished_events
+        use_simple = (self.config.stream_interval == 1)
+
+        for req_output in outputs:
+            rid = req_output.request_id
+            collector = collectors.get(rid)
+
+            if collector is not None:
+                if use_simple:
+                    collector.put(req_output)
+                else:
+                    state = states.get(rid)
+                    if state and state.should_send(
+                        req_output.completion_tokens,
+                        req_output.finished,
+                    ):
+                        collector.put(req_output)
+                        state.mark_sent(req_output.completion_tokens)
+
+            if req_output.finished:
+                event = events.get(rid)
+                if event:
+                    event.set()
+
+    def _distribute_errors(self, failed_ids: list, error_msg: str) -> None:
+        """Distribute error outputs to collectors. Runs in event loop thread."""
+        for rid in failed_ids:
+            collector = self._output_collectors.get(rid)
+            if collector is not None:
+                collector.put(
+                    RequestOutput(
+                        request_id=rid,
+                        finished=True,
+                        finish_reason="error",
+                        error=error_msg,
+                    )
+                )
+            event = self._finished_events.get(rid)
+            if event:
+                event.set()
 
     async def add_request(
         self,
@@ -347,13 +512,19 @@ class EngineCore:
         )
         self._finished_events[request_id] = asyncio.Event()
 
-        # Add to scheduler — route through the MLX executor so that
-        # prefix cache reconstruction (mx.load, mx.concatenate) never
-        # races with scheduler.step() on the Metal stream.  See #95.
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            self._mlx_executor, self.scheduler.add_request, request
-        )
+        # Route add_request through the engine thread's command queue.
+        # This ensures prefix cache reconstruction (mx.load, mx.concatenate)
+        # never races with scheduler.step() on the Metal stream.  See #95.
+        if self._engine_thread and self._engine_thread.is_alive():
+            done = asyncio.Event()
+            self._command_queue.put(("add_request", request, done))
+            await done.wait()
+        else:
+            # Fallback for pre-start or if engine thread died
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                self._mlx_executor, self.scheduler.add_request, request
+            )
 
         return request_id
 
@@ -568,7 +739,15 @@ class EngineCore:
 
         Returns:
             List of RequestOutput in same order as prompts
+
+        Raises:
+            RuntimeError: If engine thread is running (would race with scheduler)
         """
+        if self._running:
+            raise RuntimeError(
+                "Cannot use generate_batch_sync while engine is running. "
+                "Use generate() or stream_outputs() instead."
+            )
         from .request import Request
         import uuid as uuid_module
 
