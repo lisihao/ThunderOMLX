@@ -150,7 +150,17 @@
                     <i data-lucide="gauge" class="w-4 h-4"></i>
                     {{ t('navbar.tab.bench') }}
                 </button>
-                <a
+                <button
+                    @click="setMainTab('routing')"
+                    :class="mainTab === 'routing'
+                        ? 'bg-white text-neutral-900 shadow-sm'
+                        : 'text-neutral-600 hover:text-neutral-900'"
+                    class="px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-200 flex items-center gap-1.5"
+                >
+                    <i data-lucide="route" class="w-4 h-4"></i>
+                    {{ t('navbar.tab.routing') }}
+                </button>
+                <
                     href="/admin/chat"
                     class="px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-200 flex items-center gap-1.5 text-neutral-600 hover:text-neutral-900"
                 >

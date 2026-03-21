@@ -2921,6 +2921,51 @@ async def get_device_info(
 
 
 # =============================================================================
+# Routing Analytics (proxy to main server API)
+# =============================================================================
+
+
+@router.get("/api/routing/analytics")
+async def admin_routing_analytics(
+    hours: float = 24.0,
+    is_admin: bool = Depends(require_admin),
+):
+    """Proxy routing analytics from the main server."""
+    from ..server import _server_state
+
+    cloud_router = _server_state.cloud_router
+    if not cloud_router or not cloud_router.intelligent_router:
+        return {"error": "Intelligent routing is not enabled"}
+    ir = cloud_router.intelligent_router
+    if not ir._routing_store:
+        # Fallback to in-memory stats
+        return {
+            "total_decisions": ir.get_routing_stats().get("total_decisions", 0),
+            "per_target": ir.get_routing_stats().get("per_target", {}),
+            "per_task_type": ir.get_routing_stats().get("per_task_type", {}),
+            "recent_decisions": ir.get_recent_decisions(50),
+        }
+    return await ir._routing_store.get_analytics(hours)
+
+
+@router.get("/api/routing/cost-savings")
+async def admin_routing_cost_savings(
+    hours: float = 24.0,
+    is_admin: bool = Depends(require_admin),
+):
+    """Proxy routing cost savings from the main server."""
+    from ..server import _server_state
+
+    cloud_router = _server_state.cloud_router
+    if not cloud_router or not cloud_router.intelligent_router:
+        return {"savings_percentage": 0, "estimated_savings_usd": 0}
+    ir = cloud_router.intelligent_router
+    if not ir._routing_store:
+        return {"savings_percentage": 0, "estimated_savings_usd": 0}
+    return await ir._routing_store.get_cost_savings(hours)
+
+
+# =============================================================================
 # Update Check
 # =============================================================================
 

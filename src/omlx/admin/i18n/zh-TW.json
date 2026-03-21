@@ -515,5 +515,16 @@
   "js.error.delete_model_failed": "刪除模型失敗",
   "js.error.delete_model_connection": "刪除模型失敗，請檢查伺服器連線。",
   "js.success.download_started": "已開始下載：{repo_id}",
-  "js.success.settings_saved": "設定儲存成功"
+  "js.success.settings_saved": "設定儲存成功",
+  "navbar.tab.routing": "路由",
+  "routing.section_label": "智慧路由",
+  "routing.heading": "路由分析",
+  "routing.total_decisions": "總決策數",
+  "routing.local_percentage": "本地佔比",
+  "routing.cost_savings": "成本節省",
+  "routing.distribution": "決策分佈",
+  "routing.task_distribution": "任務分佈",
+  "routing.recent": "最近決策",
+  "routing.refresh": "重新整理",
+  "routing.no_data": "尚無路由決策。使用 model=\"auto\" 傳送請求以開始。"
 }

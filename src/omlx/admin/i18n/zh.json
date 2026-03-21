@@ -520,5 +520,16 @@
   "js.error.delete_model_failed": "删除模型失败",
   "js.error.delete_model_connection": "删除模型失败，请检查服务器连接。",
   "js.success.download_started": "已开始下载：{repo_id}",
-  "js.success.settings_saved": "设置已成功保存"
+  "js.success.settings_saved": "设置已成功保存",
+  "navbar.tab.routing": "路由",
+  "routing.section_label": "智能路由",
+  "routing.heading": "路由分析",
+  "routing.total_decisions": "总决策数",
+  "routing.local_percentage": "本地占比",
+  "routing.cost_savings": "成本节省",
+  "routing.distribution": "决策分布",
+  "routing.task_distribution": "任务分布",
+  "routing.recent": "最近决策",
+  "routing.refresh": "刷新",
+  "routing.no_data": "暂无路由决策。使用 model=\"auto\" 发送请求以开始。"
 }

@@ -546,5 +546,16 @@
   "js.error.delete_model_failed": "모델 삭제에 실패했습니다",
   "js.error.delete_model_connection": "모델 삭제에 실패했습니다. 서버 연결을 확인하세요.",
   "js.success.download_started": "다운로드 시작: {repo_id}",
-  "js.success.settings_saved": "설정이 저장되었습니다"
+  "js.success.settings_saved": "설정이 저장되었습니다",
+  "navbar.tab.routing": "라우팅",
+  "routing.section_label": "지능형 라우팅",
+  "routing.heading": "라우팅 분석",
+  "routing.total_decisions": "총 결정 수",
+  "routing.local_percentage": "로컬 비율",
+  "routing.cost_savings": "비용 절감",
+  "routing.distribution": "결정 분포",
+  "routing.task_distribution": "작업 분포",
+  "routing.recent": "최근 결정",
+  "routing.refresh": "새로고침",
+  "routing.no_data": "아직 라우팅 결정이 없습니다. model=\"auto\"로 요청을 보내 시작하세요."
 }

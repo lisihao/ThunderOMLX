@@ -546,5 +546,16 @@
     "js.error.delete_model_failed": "Failed to delete model",
     "js.error.delete_model_connection": "Failed to delete model. Check server connection.",
     "js.success.download_started": "Download started: {repo_id}",
-    "js.success.settings_saved": "Settings saved successfully"
+    "js.success.settings_saved": "Settings saved successfully",
+    "navbar.tab.routing": "Routing",
+    "routing.section_label": "Intelligent Routing",
+    "routing.heading": "Routing Analytics",
+    "routing.total_decisions": "Total Decisions",
+    "routing.local_percentage": "Local %",
+    "routing.cost_savings": "Cost Savings",
+    "routing.distribution": "Decision Distribution",
+    "routing.task_distribution": "Task Distribution",
+    "routing.recent": "Recent Decisions",
+    "routing.refresh": "Refresh",
+    "routing.no_data": "No routing decisions yet. Send requests with model=\"auto\" to start."
 }

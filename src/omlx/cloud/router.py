@@ -20,6 +20,8 @@ from omlx.cloud.context_pilot import ContextPilotOptimizer
 from omlx.cloud.conversation_store import ConversationDB, ConversationStore, TopicSegment
 from omlx.cloud.dispatcher import CloudDispatcher
 from omlx.cloud.intelligent_router import IntelligentRouter
+from omlx.cloud.ml_classifier import MLClassifier
+from omlx.cloud.routing_store import RoutingStore
 from omlx.cloud.selector import ModelSelector
 from omlx.cloud.semantic_cache import SemanticCache, SemanticCacheDB
 
@@ -136,15 +138,31 @@ class CloudRouter:
 
         # Phase: Intelligent Router (model="auto")
         self._intelligent_router: Optional[IntelligentRouter] = None
+        self._routing_store: Optional[RoutingStore] = None
         if getattr(settings, "intelligent_routing_enabled", False):
             try:
+                self._routing_store = RoutingStore()
+                # Create 0.8B ML classifier for hybrid mode
+                ml_clf: Optional[MLClassifier] = None
+                try:
+                    api_key = getattr(settings, "api_key", "") or ""
+                    ml_clf = MLClassifier(
+                        model_name="qwen3.5-0.8b-opus-distilled",
+                        base_url=f"http://localhost:{getattr(settings, 'port', 8082)}",
+                        api_key=api_key,
+                    )
+                    logger.info("[CloudRouter] MLClassifier initialized for hybrid routing")
+                except Exception as ml_exc:
+                    logger.warning("[CloudRouter] MLClassifier init failed: %s", ml_exc)
                 self._intelligent_router = IntelligentRouter(
                     classifier=TaskClassifier(),
                     selector=ModelSelector(),
                     settings=settings,
                     budget_checker=self._budget,
+                    routing_store=self._routing_store,
+                    ml_classifier=ml_clf,
                 )
-                logger.info("[CloudRouter] IntelligentRouter initialized")
+                logger.info("[CloudRouter] IntelligentRouter initialized (hybrid=%s)", ml_clf is not None)
             except Exception as exc:
                 logger.warning(
                     "[CloudRouter] IntelligentRouter init failed: %s", exc
@@ -226,6 +244,21 @@ class CloudRouter:
         default_path = Path.home() / ".omlx" / "cloud_budget.db"
         default_path.parent.mkdir(parents=True, exist_ok=True)
         return str(default_path)
+
+    async def async_init(self) -> None:
+        """Async initialization for components that require an event loop.
+
+        Must be called after construction (e.g. in the FastAPI lifespan).
+        Currently initialises the RoutingStore SQLite connection.
+        """
+        if self._routing_store:
+            try:
+                await self._routing_store.initialize()
+                logger.info("[CloudRouter] RoutingStore initialized")
+            except Exception as exc:
+                logger.warning(
+                    "[CloudRouter] RoutingStore init failed: %s", exc
+                )
 
     @property
     def intelligent_router(self) -> Optional[IntelligentRouter]:

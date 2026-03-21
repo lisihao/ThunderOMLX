@@ -22,6 +22,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from omlx.cloud.confidence_checker import ConfidenceChecker
+from omlx.cloud.ml_classifier import MLClassifier
+from omlx.cloud.routing_store import RoutingStore
 
 logger = logging.getLogger("omlx.cloud.intelligent_router")
 
@@ -127,6 +129,8 @@ class IntelligentRouter:
         settings: Any,
         local_models: Optional[List[str]] = None,
         budget_checker: Optional[Any] = None,
+        routing_store: Optional[RoutingStore] = None,
+        ml_classifier: Optional[MLClassifier] = None,
     ) -> None:
         """Initialize the IntelligentRouter.
 
@@ -136,10 +140,14 @@ class IntelligentRouter:
             settings:   CloudSettingsV2 instance
             local_models: Available local model IDs
             budget_checker: Optional BudgetChecker with ``check()``
+            routing_store: Optional RoutingStore for SQLite persistence
+            ml_classifier: Optional 0.8B MLClassifier for hybrid mode
         """
         self._classifier = classifier
         self._selector = selector
         self._settings = settings
+        self._routing_store: Optional[RoutingStore] = routing_store
+        self._ml_classifier: Optional[MLClassifier] = ml_classifier
         self._local_models = local_models or ["qwen3.5-35b-mlx"]
         self._primary_local = (
             self._local_models[0] if self._local_models else "qwen3.5-35b-mlx"
@@ -215,8 +223,11 @@ class IntelligentRouter:
         # 1. Extract messages (Pydantic → plain dicts)
         messages = self._extract_messages(request)
 
-        # 2. Classify
+        # 2. Classify (rule-based)
         classification = self._classifier.classify(messages)
+
+        # 2.5. Hybrid classification (0.8B supplement when confidence is low)
+        classification = await self._hybrid_classify(classification, messages)
 
         # 3. Tier 0 - Force Rules
         decision = self._tier0_force_rules(classification)
@@ -398,6 +409,95 @@ class IntelligentRouter:
             Dict with mean/min/max/std logprob, confidence level, etc.
         """
         return self._confidence_checker.analyze(logprobs)
+
+    # ------------------------------------------------------------------
+    # Hybrid Classification (rule + 0.8B ML)
+    # ------------------------------------------------------------------
+
+    _HYBRID_CONFIDENCE_THRESHOLD = 0.9
+
+    async def _hybrid_classify(
+        self,
+        classification: Dict[str, Any],
+        messages: List[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        """Optionally refine classification using the 0.8B ML classifier.
+
+        Strategy:
+          1. If rule classifier confidence >= 0.9, trust it directly.
+          2. If confidence < 0.9 and MLClassifier is available, call 0.8B.
+          3. If both agree, adopt the result.
+          4. If they disagree, prefer the more conservative option
+             (the one recommending cloud over local).
+
+        Args:
+            classification: Output from the rule-based TaskClassifier.
+            messages: Plain-dict messages for extracting the last user text.
+
+        Returns:
+            Potentially refined classification dict (mutated in-place).
+        """
+        if self._ml_classifier is None:
+            return classification
+
+        # Only relevant for coding tasks with subtask info
+        subtask_info = classification.get("coding_subtask")
+        if not subtask_info or not isinstance(subtask_info, dict):
+            return classification
+
+        rule_confidence = subtask_info.get("confidence", 1.0)
+        if rule_confidence >= self._HYBRID_CONFIDENCE_THRESHOLD:
+            return classification
+
+        # Extract last user message for ML classification
+        last_user = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user = msg.get("content", "")
+                break
+
+        if not last_user:
+            return classification
+
+        ml_result = await self._ml_classifier.classify(last_user)
+        if ml_result is None:
+            logger.debug("[_hybrid_classify] ML classifier returned None, keeping rule result")
+            return classification
+
+        rule_subtask = subtask_info.get("subtask", "")
+        ml_subtask = ml_result.get("task_type", "")
+
+        if rule_subtask == ml_subtask:
+            # Agreement — boost confidence
+            subtask_info["confidence"] = min(rule_confidence + 0.2, 1.0)
+            logger.info(
+                "[_hybrid_classify] agreement: %s (confidence %.2f -> %.2f)",
+                rule_subtask, rule_confidence, subtask_info["confidence"],
+            )
+        else:
+            # Disagreement — prefer the more conservative (cloud-leaning) option
+            ml_needs_cloud = ml_result.get("needs_cloud", False)
+            rule_is_local = rule_subtask in _LOCAL_CODING_SUBTASKS
+
+            if ml_needs_cloud and rule_is_local:
+                # ML says cloud, rule says local — adopt ML's classification
+                subtask_info["subtask"] = ml_subtask
+                subtask_info["confidence"] = 0.7
+                classification["coding_subtask"] = subtask_info
+                if ml_result.get("complexity"):
+                    classification["complexity"] = ml_result["complexity"]
+                logger.info(
+                    "[_hybrid_classify] override: rule=%s -> ml=%s (ML recommends cloud)",
+                    rule_subtask, ml_subtask,
+                )
+            else:
+                # Otherwise keep rule result but note the disagreement
+                logger.info(
+                    "[_hybrid_classify] keep rule=%s (ml=%s, no cloud upgrade needed)",
+                    rule_subtask, ml_subtask,
+                )
+
+        return classification
 
     # ------------------------------------------------------------------
     # Tier 0 - Force Rules
@@ -866,6 +966,7 @@ class IntelligentRouter:
         """Append a decision to the bounded routing log.
 
         Trims the oldest entries when the log exceeds ``_max_log_size``.
+        Also persists to SQLite via RoutingStore (fire-and-forget).
 
         Args:
             decision: The decision to record.
@@ -873,3 +974,15 @@ class IntelligentRouter:
         self._routing_log.append(decision)
         if len(self._routing_log) > self._max_log_size:
             self._routing_log = self._routing_log[-self._max_log_size:]
+
+        # Persist to SQLite (fire-and-forget)
+        if self._routing_store:
+            import asyncio
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(
+                    self._routing_store.record_decision(asdict(decision))
+                )
+            except RuntimeError:
+                pass  # No running event loop

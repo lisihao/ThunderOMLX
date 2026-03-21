@@ -1,0 +1,150 @@
+<div x-show="mainTab === 'routing'" x-cloak x-data="{
+    routingData: null,
+    costData: null,
+    loading: false,
+    async loadRoutingData() {
+        this.loading = true;
+        try {
+            const [analyticsRes, costRes] = await Promise.all([
+                fetch('/admin/api/routing/analytics?hours=24'),
+                fetch('/admin/api/routing/cost-savings?hours=24')
+            ]);
+            this.routingData = await analyticsRes.json();
+            this.costData = await costRes.json();
+        } catch (e) {
+            console.error('Failed to load routing data', e);
+        }
+        this.loading = false;
+    }
+}" x-init="loadRoutingData(); $watch('mainTab', v => { if (v === 'routing') loadRoutingData() })">
+
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h2 class="text-xs font-bold uppercase tracking-widest text-neutral-400 mb-2">{{ t('routing.section_label') }}</h2>
+            <h3 class="text-2xl font-bold tracking-tight text-neutral-900">{{ t('routing.heading') }}</h3>
+        </div>
+        <button @click="loadRoutingData()" class="px-3 py-1.5 text-xs font-medium text-neutral-500 hover:text-neutral-700 hover:bg-neutral-100 rounded-lg transition-all flex items-center gap-1.5">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+            {{ t('routing.refresh') }}
+        </button>
+    </div>
+
+    <div class="grid grid-cols-3 gap-6 mb-8">
+        <div class="bg-white rounded-2xl border border-neutral-200 p-8 text-center">
+            <p class="text-xs font-bold uppercase tracking-widest text-neutral-400 mb-3">{{ t('routing.total_decisions') }}</p>
+            <p class="text-3xl font-bold tracking-tight text-neutral-900" x-text="routingData?.total_decisions || 0"></p>
+        </div>
+        <div class="bg-white rounded-2xl border border-neutral-200 p-8 text-center">
+            <p class="text-xs font-bold uppercase tracking-widest text-neutral-400 mb-3">{{ t('routing.local_percentage') }}</p>
+            <p class="text-3xl font-bold tracking-tight text-neutral-900" x-text="routingData?.total_decisions ? Math.round((routingData.per_target?.local || 0) / routingData.total_decisions * 100) + '%' : '0%'"></p>
+        </div>
+        <div class="bg-white rounded-2xl border border-neutral-200 p-8 text-center">
+            <p class="text-xs font-bold uppercase tracking-widest text-neutral-400 mb-3">{{ t('routing.cost_savings') }}</p>
+            <p class="text-3xl font-bold tracking-tight text-neutral-900" x-text="(costData?.savings_percentage || 0) + '%'"></p>
+        </div>
+    </div>
+
+    <template x-if="routingData?.total_decisions === 0">
+        <div class="bg-white rounded-2xl border border-neutral-200 p-12 text-center">
+            <i data-lucide="route" class="w-12 h-12 text-neutral-300 mx-auto mb-4"></i>
+            <p class="text-neutral-500">{{ t('routing.no_data') }}</p>
+        </div>
+    </template>
+
+    <template x-if="routingData?.total_decisions > 0">
+        <div>
+            <div class="bg-white rounded-2xl border border-neutral-200 overflow-hidden mb-8">
+                <div class="flex items-center justify-between px-6 py-4 bg-neutral-100 border-b border-neutral-200">
+                    <div class="flex items-center gap-3">
+                        <i data-lucide="pie-chart" class="w-4 h-4 text-neutral-500"></i>
+                        <span class="text-xs font-bold uppercase tracking-wider text-neutral-600">{{ t('routing.distribution') }}</span>
+                    </div>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div class="flex items-center gap-4">
+                        <span class="w-32 text-sm font-medium text-neutral-700">Local</span>
+                        <div class="flex-1 bg-gray-200 rounded-full h-3">
+                            <div class="bg-green-500 h-3 rounded-full" :style="'width: ' + (routingData?.total_decisions ? (routingData.per_target?.local || 0) / routingData.total_decisions * 100 : 0) + '%'"></div>
+                        </div>
+                        <span class="text-sm text-neutral-500 w-12 text-right" x-text="routingData?.per_target?.local || 0"></span>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <span class="w-32 text-sm font-medium text-neutral-700">Economy</span>
+                        <div class="flex-1 bg-gray-200 rounded-full h-3">
+                            <div class="bg-amber-500 h-3 rounded-full" :style="'width: ' + (routingData?.total_decisions ? (routingData.per_target?.cloud_economy || 0) / routingData.total_decisions * 100 : 0) + '%'"></div>
+                        </div>
+                        <span class="text-sm text-neutral-500 w-12 text-right" x-text="routingData?.per_target?.cloud_economy || 0"></span>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <span class="w-32 text-sm font-medium text-neutral-700">Premium</span>
+                        <div class="flex-1 bg-gray-200 rounded-full h-3">
+                            <div class="bg-blue-500 h-3 rounded-full" :style="'width: ' + (routingData?.total_decisions ? (routingData.per_target?.cloud_premium || 0) / routingData.total_decisions * 100 : 0) + '%'"></div>
+                        </div>
+                        <span class="text-sm text-neutral-500 w-12 text-right" x-text="routingData?.per_target?.cloud_premium || 0"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-2xl border border-neutral-200 overflow-hidden mb-8">
+                <div class="flex items-center justify-between px-6 py-4 bg-neutral-100 border-b border-neutral-200">
+                    <div class="flex items-center gap-3">
+                        <i data-lucide="bar-chart-3" class="w-4 h-4 text-neutral-500"></i>
+                        <span class="text-xs font-bold uppercase tracking-wider text-neutral-600">{{ t('routing.task_distribution') }}</span>
+                    </div>
+                </div>
+                <div class="p-6 space-y-4">
+                    <template x-for="[type, count] in Object.entries(routingData?.per_task_type || {})" :key="type">
+                        <div class="flex items-center gap-4">
+                            <span class="w-32 text-sm font-medium text-neutral-700 truncate" x-text="type"></span>
+                            <div class="flex-1 bg-gray-200 rounded-full h-3">
+                                <div class="bg-neutral-500 h-3 rounded-full" :style="'width: ' + (routingData?.total_decisions ? count / routingData.total_decisions * 100 : 0) + '%'"></div>
+                            </div>
+                            <span class="text-sm text-neutral-500 w-12 text-right" x-text="count"></span>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-2xl border border-neutral-200 overflow-hidden">
+                <div class="flex items-center justify-between px-6 py-4 bg-neutral-100 border-b border-neutral-200">
+                    <div class="flex items-center gap-3">
+                        <i data-lucide="history" class="w-4 h-4 text-neutral-500"></i>
+                        <span class="text-xs font-bold uppercase tracking-wider text-neutral-600">{{ t('routing.recent') }}</span>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr>
+                                <th class="text-left px-4 py-3 text-xs font-bold uppercase tracking-wider text-neutral-500 bg-neutral-50">Time</th>
+                                <th class="text-left px-4 py-3 text-xs font-bold uppercase tracking-wider text-neutral-500 bg-neutral-50">Task</th>
+                                <th class="text-left px-4 py-3 text-xs font-bold uppercase tracking-wider text-neutral-500 bg-neutral-50">Model</th>
+                                <th class="text-left px-4 py-3 text-xs font-bold uppercase tracking-wider text-neutral-500 bg-neutral-50">Target</th>
+                                <th class="text-left px-4 py-3 text-xs font-bold uppercase tracking-wider text-neutral-500 bg-neutral-50">Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="d in (routingData?.recent_decisions || []).slice(0, 20)" :key="d.timestamp">
+                                <tr>
+                                    <td class="px-4 py-3 text-neutral-700 border-t border-neutral-100" x-text="new Date(d.timestamp * 1000).toLocaleTimeString()"></td>
+                                    <td class="px-4 py-3 text-neutral-700 border-t border-neutral-100" x-text="d.task_type"></td>
+                                    <td class="px-4 py-3 text-neutral-700 border-t border-neutral-100" x-text="d.model"></td>
+                                    <td class="px-4 py-3 border-t border-neutral-100">
+                                        <span class="px-2 py-1 text-xs font-medium rounded-full"
+                                            :class="{
+                                                'bg-green-100 text-green-700': d.target === 'local',
+                                                'bg-amber-100 text-amber-700': d.target === 'cloud_economy',
+                                                'bg-blue-100 text-blue-700': d.target === 'cloud_premium'
+                                            }"
+                                            x-text="d.target"></span>
+                                    </td>
+                                    <td class="px-4 py-3 text-neutral-700 border-t border-neutral-100" x-text="d.reason"></td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </template>
+</div>

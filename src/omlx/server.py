@@ -346,6 +346,10 @@ async def lifespan(app: FastAPI):
     if mcp_config:
         await init_mcp(mcp_config)
 
+    # Initialize RoutingStore async connection (if cloud router is active)
+    if _server_state.cloud_router is not None:
+        await _server_state.cloud_router.async_init()
+
     # Initialize Named Prompt Cache Manager (KVTC compression)
     from .cache.prompt_cache_manager import PromptCacheManager
     from .cache.kvtc_calibration_store import KVTCCalibrationStore
@@ -1248,6 +1252,46 @@ async def routing_mode(
         "mode": "shadow" if ir.shadow_mode else "active",
         "message": f"Routing mode set to {'shadow' if ir.shadow_mode else 'active'}",
     }
+
+
+@app.get("/v1/routing/analytics")
+async def routing_analytics(
+    hours: float = 24.0, _: bool = Depends(verify_api_key)
+):
+    """Return aggregated routing analytics."""
+    cloud_router = _server_state.cloud_router
+    if not cloud_router or not cloud_router.intelligent_router:
+        return JSONResponse(
+            {"error": "Intelligent routing is not enabled"},
+            status_code=400,
+        )
+    ir = cloud_router.intelligent_router
+    if not ir._routing_store:
+        return JSONResponse(
+            {"error": "Routing store not initialized"},
+            status_code=400,
+        )
+    return await ir._routing_store.get_analytics(hours)
+
+
+@app.get("/v1/routing/cost-savings")
+async def routing_cost_savings(
+    hours: float = 24.0, _: bool = Depends(verify_api_key)
+):
+    """Estimate cost savings from intelligent routing."""
+    cloud_router = _server_state.cloud_router
+    if not cloud_router or not cloud_router.intelligent_router:
+        return JSONResponse(
+            {"error": "Intelligent routing is not enabled"},
+            status_code=400,
+        )
+    ir = cloud_router.intelligent_router
+    if not ir._routing_store:
+        return JSONResponse(
+            {"error": "Routing store not initialized"},
+            status_code=400,
+        )
+    return await ir._routing_store.get_cost_savings(hours)
 
 
 @app.post("/v1/context/optimize")
