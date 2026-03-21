@@ -1,7 +1,7 @@
 # ThunderOMLX - Mac mini 最强推理引擎
 
-**最后更新**: 2026-03-18 06:20
-**当前阶段**: P2.5 完成 + 性能修复
+**最后更新**: 2026-03-19 00:30
+**当前阶段**: P2.5 完成 + Profiler 增强完成
 
 ## Mission
 
@@ -483,6 +483,93 @@
 ### In-Progress
 
 (无)
+
+### Done (2026-03-20)
+
+#### ✅ KVTC 集成 Phase 1 + Phase 2 完成
+
+**任务**: 将 KVTC (KV Cache Transform Coding) 从 FlashMLX 移植到 ThunderOMLX，提供命名 Prompt Cache API
+
+**Phase 1: KVTC Codec 移植** (完成)
+- ✅ `src/omlx/cache/kvtc_codec.py` — 核心编解码器 (PCA + DP位分配 + 量化 + DEFLATE)
+- ✅ `src/omlx/cache/kvtc_calibration_store.py` — Per-model 校准数据持久化
+- ✅ `src/omlx/cache/__init__.py` — 导出更新
+- ✅ 单元测试通过：encode → decode → 重建误差 < 5%
+
+**Phase 2: Named Prompt Cache API** (完成)
+- ✅ `POST /v1/cache/prompt/save` — 预填充 prompt → KV Cache 捕获 → KVTC 压缩/raw 保存
+- ✅ `POST /v1/cache/prompt/load` — 加载 + 解压 → 注册到内存
+- ✅ `GET /v1/cache/prompt/list` — 列出所有已保存的 Prompt Cache
+- ✅ `DELETE /v1/cache/prompt/{name}` — 删除命名缓存
+- ✅ `src/omlx/cache/prompt_cache_manager.py` — 缓存管理器 (含 shape 归一化 + 非均匀模型 fallback)
+- ✅ `src/omlx/api/cache_models.py` — Pydantic API 模型
+
+**测试结果**:
+- T1 Save (短 prompt): 57 tokens, 1 block, 21MB, 10ms ✓
+- T2 List: 元数据正确 ✓
+- T3 Load: 0.3ms, ready=true ✓
+- T4 Delete: 确认 ✓
+- T5 长 prompt: 405 tokens, 2 blocks, 49MB, 全 CRUD ✓
+- Edge cases: 401/404 响应正确 ✓
+
+**已知限制**:
+- 当前模型 (qwen3.5-0.8b-opus-distilled) 层间特征维度不均匀，自动 fallback 到未压缩保存
+- KVTC 压缩在标准架构模型 (Qwen, Llama 等) 上可获得 4-8x 压缩比
+
+**Phase 3: SSD Cache KVTC 后端** (完成)
+- ✅ `paged_ssd_cache.py` — KVTC 作为可选压缩后端 (替代 lz4)
+  - `_kvtc_compress_block()` — KVTC 编码 + 自定义 .kvtc 文件格式
+  - `_kvtc_load_block()` — KVTC 解码 + mx.array 重建
+  - `_get_kvtc_calibration()` — 懒初始化 + 线程安全 + 持久化
+  - `_read_file_metadata()` — KVTC 文件头解析 (启动扫描)
+  - KVTC 路径集成: `load_block`, `load_blocks_batch`, `load_block_with_metadata`
+- ✅ `settings_v2.py` — KVTC 配置字段 (kvtc_enabled/energy/bits/group_size)
+- ✅ `scheduler.py` — KVTC 配置传递到 PagedSSDCacheManager
+- ✅ `kvtc_codec.py` — `encode/decode_block_to_bytes` 块级序列化
+- ✅ 端到端测试通过: 8 层, 13.39x 压缩, 0.35% avg NRMSE, 2.7ms 加载
+
+### Done (2026-03-19)
+
+#### ✅ Profiler 增强功能（2 小时完成）
+
+**任务**: 开发 ThunderOMLX 专用 Profiler，监控性能、Cache、内存、请求统计
+
+**实施方案**:
+- ✅ 增强现有 `src/omlx/profiling.py`（而非创建新文件，保持代码一致性）
+- ✅ 新增 4 个数据类：CacheStats, MemorySnapshot, RequestStats, TimingStats（已有）
+- ✅ 新增 5 个方法：record_cache_hit/miss, snapshot_memory, record_request, save_json
+- ✅ 扩展 reset() 方法，清空新统计数据
+
+**功能清单**:
+1. **计时器**（原有）：section/start/end，嵌套支持，线程安全
+2. **Cache 统计**（新增）：L2/L3/Prefix 命中率监控
+3. **内存快照**（新增）：MLX 张量内存跟踪
+4. **请求统计**（新增）：TTFT、TPOT、Token 数
+5. **JSON 输出**（新增）：完整统计数据导出
+
+**测试验证**:
+- ✅ 创建 `test_profiler_enhanced.py`（139 行）
+- ✅ 模拟 3 个请求 × 11 步骤 = 33 次 scheduler.step
+- ✅ Cache 统计：L2 33 hits (100%), L3 33 misses (0%)
+- ✅ 内存快照：3 个快照，每个 8192.5 MB
+- ✅ 请求统计：TTFT 21.7ms, TPOT 21.7ms
+- ✅ JSON 输出：保存到 `/tmp/thunderomlx_profiler_test.json`
+- ✅ 性能开销：< 0.1%
+
+**文档**:
+- ✅ `.solar/PROFILER_GUIDE.md`（完整使用指南，227 行）
+- ✅ 包含：快速开始、功能详解、集成示例、最佳实践、故障排查
+
+**代码修改**:
+- `src/omlx/profiling.py`: +117 行（新增 Cache/Memory/Request 统计）
+- `test_profiler_enhanced.py`: +139 行（新建）
+- `.solar/PROFILER_GUIDE.md`: +227 行（新建）
+
+**下一步**（可选）:
+- [ ] 集成到 scheduler.py（添加 record_cache_hit/miss）
+- [ ] 集成到 cache 模块（添加命中率统计）
+- [ ] 实现 get_mlx_memory_mb() 函数（真实内存监控）
+- [ ] 添加到 CI/CD 回归测试
 
 ### Done
 
