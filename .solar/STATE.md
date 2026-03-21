@@ -80,6 +80,26 @@
 - scheduler.py 通过 ContextPilot 传递 message_boundaries 到 prefix cache matcher
 - 不再需要独立的 cache-aware chunking phase
 
+### 🔜 P3 HTTP Overhead 优化 (待启动)
+
+**状态**: 📋 **已识别，待启动**
+**来源**: P2 Phase 1 根因分析 + 早期优化清单
+**目标**: 降低 API 层 HTTP 开销 (当前 3.06ms/tok, 占 TPOT 25%)
+
+**已知开销分析**:
+- HTTP/SSE 序列化 + response wrapping
+- EngineCore → HTTP 层数据传递
+- 并发请求调度开销
+- ContextPilot 额外处理
+
+**潜在优化方向**:
+- orjson 替代 json 序列化
+- 减少内存拷贝 (zero-copy response)
+- SSE 批量发送 (合并多个 token 事件)
+- Response wrapping 简化
+
+**预期收益**: 3ms → <1ms/tok, TG 从 ~79 tok/s → ~85+ tok/s
+
 ---
 
 ### 🎉 P2 Prefix Caching 完成 (2026-03-17)
@@ -517,6 +537,19 @@
 - **Cache-aware Scheduling**: scheduler.py:2755-2786 已集成 ContextPilot，传递 `message_boundaries` + `system_prompt_hash` 到 prefix cache matcher，三级 Skip Logic 实现完整缓存感知调度
 
 **状态**: ✅ 已关闭，不再需要
+
+#### ✅/❌ 早期优化方向清单归档 (来源: x.com/qingq77 推文)
+
+**背景**: 早期 LMCache/端到端优化规划，逐项审计现状。
+
+| # | 优化方向 | 状态 | 说明 |
+|---|---------|------|------|
+| 1 | GPU-side KV cache / PagedAttention | ✅ 已完成 | `paged_cache.py` 1786行，vLLM 风格 BlockPool + COW + LRU |
+| 2 | 异步 Prefetch | ✅ 已完成 | `async_prefetcher.py` + `prefetch_worker.py`，185x SSD 加速 |
+| 3 | KV cache 压缩 (q4_0/f16) | ✅ 已完成 | lz4(默认) + KVTC(4-8x)，超出原设想 |
+| 4 | HTTP overhead 优化 (3ms/tok, 25%) | 🔄 **待做** | 见 Current Plan → P3 HTTP Overhead |
+| 5 | Sampling 结果缓存 | ❌ 废弃 | 边际收益小，cache hit 已跳过 prefill |
+| 6 | Kernel 吞吐 > 50GB/s | ❌ 废弃 | MLX 已内建 Flash Attention，无需自写 Metal kernel |
 
 ### Done (2026-03-20)
 
