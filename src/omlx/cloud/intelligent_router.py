@@ -22,6 +22,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from omlx.cloud.confidence_checker import ConfidenceChecker
+from omlx.cloud.mf_router import MFRouter
 from omlx.cloud.ml_classifier import MLClassifier
 from omlx.cloud.routing_store import RoutingStore
 
@@ -131,6 +132,7 @@ class IntelligentRouter:
         budget_checker: Optional[Any] = None,
         routing_store: Optional[RoutingStore] = None,
         ml_classifier: Optional[MLClassifier] = None,
+        mf_router: Optional[MFRouter] = None,
     ) -> None:
         """Initialize the IntelligentRouter.
 
@@ -142,12 +144,14 @@ class IntelligentRouter:
             budget_checker: Optional BudgetChecker with ``check()``
             routing_store: Optional RoutingStore for SQLite persistence
             ml_classifier: Optional 0.8B MLClassifier for hybrid mode
+            mf_router: Optional MFRouter for preference-based scoring
         """
         self._classifier = classifier
         self._selector = selector
         self._settings = settings
         self._routing_store: Optional[RoutingStore] = routing_store
         self._ml_classifier: Optional[MLClassifier] = ml_classifier
+        self._mf_router: Optional[MFRouter] = mf_router
         self._local_models = local_models or ["qwen3.5-35b-mlx"]
         self._primary_local = (
             self._local_models[0] if self._local_models else "qwen3.5-35b-mlx"
@@ -236,6 +240,9 @@ class IntelligentRouter:
             # 4. Tier 1 - Task-Based Routing
             decision = self._tier1_task_routing(classification)
 
+            # 4.5. MF Router scoring (override Tier 1 for ambiguous cases)
+            decision = await self._mf_router_refine(decision, messages)
+
             # 5. Tier 2 - Load-Aware
             decision = self._tier2_load_aware(decision, local_queue_depth)
 
@@ -280,13 +287,16 @@ class IntelligentRouter:
             task_counts[d.task_type] = task_counts.get(d.task_type, 0) + 1
             tier_counts[d.tier] = tier_counts.get(d.tier, 0) + 1
 
-        return {
+        result = {
             "total_decisions": total,
             "per_target": target_counts,
             "per_task_type": task_counts,
             "per_tier": tier_counts,
             "session_pins": len(self._session_pins),
         }
+        if self._mf_router is not None:
+            result["mf_router"] = self._mf_router.get_stats()
+        return result
 
     def get_recent_decisions(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Return the most recent routing decisions as serialisable dicts.
@@ -498,6 +508,121 @@ class IntelligentRouter:
                 )
 
         return classification
+
+    # ------------------------------------------------------------------
+    # MF Router refinement (RouteLLM preference-based scoring)
+    # ------------------------------------------------------------------
+
+    async def _mf_router_refine(
+        self,
+        decision: RoutingDecision,
+        messages: List[Dict[str, str]],
+    ) -> RoutingDecision:
+        """Refine a Tier 1 decision using MF Router preference scoring.
+
+        The MF Router predicts win_rate(strong, weak) based on Chatbot Arena
+        preference data.  It can override the rule-based decision in two cases:
+
+        1. **Upgrade**: Rule says LOCAL but MF says cloud (high win_rate).
+           Only applied when rule confidence is not very high and the task
+           is in the "complexity scaling" group (debugging, refactor).
+        2. **Downgrade**: Rule says CLOUD_PREMIUM but MF says local (low
+           win_rate).  Applied for economy — if the MF model thinks the
+           weak model wins, we save cloud cost.
+
+        Args:
+            decision: Current Tier 1 routing decision.
+            messages: Plain-dict messages for extracting last user text.
+
+        Returns:
+            Potentially modified RoutingDecision.
+        """
+        if self._mf_router is None or not self._mf_router.available:
+            return decision
+
+        # Extract last user message
+        last_user = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user = msg.get("content", "")
+                break
+
+        if not last_user:
+            return decision
+
+        try:
+            should_cloud, win_rate = await self._mf_router.should_route_to_cloud(
+                last_user
+            )
+        except Exception as exc:
+            logger.warning("[_mf_router_refine] MF Router error: %s", exc)
+            return decision
+
+        logger.info(
+            "[_mf_router_refine] win_rate=%.4f threshold=%.2f "
+            "mf_says=%s | current=%s/%s",
+            win_rate,
+            self._mf_router.threshold,
+            "CLOUD" if should_cloud else "LOCAL",
+            decision.target.value,
+            decision.model,
+        )
+
+        # Case 1: MF says CLOUD but rule says LOCAL
+        # Only upgrade for ambiguous cases (complexity-scaling subtasks)
+        if (
+            should_cloud
+            and decision.target == RouteTarget.LOCAL
+            and decision.coding_subtask in _COMPLEXITY_SCALING_SUBTASKS
+        ):
+            upgraded = RoutingDecision(
+                target=RouteTarget.CLOUD_PREMIUM,
+                model=self._pick_premium_model(),
+                reason=(
+                    f"MF Router upgrade: win_rate={win_rate:.3f} "
+                    f"(>{self._mf_router.threshold:.2f}) for "
+                    f"{decision.coding_subtask}"
+                ),
+                confidence=win_rate,
+                tier=1,
+                task_type=decision.task_type,
+                coding_subtask=decision.coding_subtask,
+                complexity="high",
+            )
+            logger.info(
+                "[_mf_router_refine] UPGRADE: %s -> %s (win_rate=%.3f)",
+                decision.model, upgraded.model, win_rate,
+            )
+            return upgraded
+
+        # Case 2: MF says LOCAL but rule says CLOUD_PREMIUM
+        # Downgrade to economy to save cost
+        if (
+            not should_cloud
+            and decision.target == RouteTarget.CLOUD_PREMIUM
+            and win_rate < 0.3  # Strong signal that weak model suffices
+        ):
+            downgraded = RoutingDecision(
+                target=RouteTarget.LOCAL,
+                model=self._primary_local,
+                reason=(
+                    f"MF Router downgrade: win_rate={win_rate:.3f} "
+                    f"(<0.30) — local model sufficient"
+                ),
+                confidence=1.0 - win_rate,
+                tier=1,
+                task_type=decision.task_type,
+                coding_subtask=decision.coding_subtask,
+                complexity=decision.complexity,
+            )
+            logger.info(
+                "[_mf_router_refine] DOWNGRADE: %s -> %s (win_rate=%.3f)",
+                decision.model, downgraded.model, win_rate,
+            )
+            return downgraded
+
+        # No change — MF agrees with rule or not confident enough to override
+        return decision
 
     # ------------------------------------------------------------------
     # Tier 0 - Force Rules

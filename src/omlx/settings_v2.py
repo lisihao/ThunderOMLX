@@ -615,6 +615,11 @@ class CloudSettingsV2(BaseModel):
     local_overflow_threshold: int = 4        # Local queue depth before overflow to cloud
     session_pin_threshold: int = 3           # Consecutive same-model turns before pinning
 
+    # MF Router (RouteLLM Matrix Factorization)
+    mf_router_enabled: bool = False          # Enable MF Router scoring
+    mf_router_threshold: float = 0.5         # Win rate threshold (higher = more local)
+    mf_router_checkpoint: Optional[str] = None  # Path to model.safetensors (auto-detected if None)
+
 
 class GlobalSettingsV2(BaseSettings):
     """

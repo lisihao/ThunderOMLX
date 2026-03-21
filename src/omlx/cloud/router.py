@@ -20,6 +20,7 @@ from omlx.cloud.context_pilot import ContextPilotOptimizer
 from omlx.cloud.conversation_store import ConversationDB, ConversationStore, TopicSegment
 from omlx.cloud.dispatcher import CloudDispatcher
 from omlx.cloud.intelligent_router import IntelligentRouter
+from omlx.cloud.mf_router import MFRouter
 from omlx.cloud.ml_classifier import MLClassifier
 from omlx.cloud.routing_store import RoutingStore
 from omlx.cloud.selector import ModelSelector
@@ -154,6 +155,29 @@ class CloudRouter:
                     logger.info("[CloudRouter] MLClassifier initialized for hybrid routing")
                 except Exception as ml_exc:
                     logger.warning("[CloudRouter] MLClassifier init failed: %s", ml_exc)
+                # Create MF Router (RouteLLM Matrix Factorization)
+                mf_router: Optional[MFRouter] = None
+                if getattr(settings, "mf_router_enabled", False):
+                    try:
+                        ckpt = getattr(settings, "mf_router_checkpoint", None) or MFRouter.default_checkpoint_path()
+                        oai_key = getattr(settings, "openai_api_key", "") or ""
+                        threshold = getattr(settings, "mf_router_threshold", 0.5)
+                        if ckpt and oai_key:
+                            mf_router = MFRouter(
+                                checkpoint_path=ckpt,
+                                openai_api_key=oai_key,
+                                threshold=threshold,
+                            )
+                            logger.info("[CloudRouter] MFRouter initialized (threshold=%.2f)", threshold)
+                        else:
+                            logger.warning(
+                                "[CloudRouter] MFRouter skipped: checkpoint=%s openai_key=%s",
+                                "set" if ckpt else "MISSING",
+                                "set" if oai_key else "MISSING",
+                            )
+                    except Exception as mf_exc:
+                        logger.warning("[CloudRouter] MFRouter init failed: %s", mf_exc)
+
                 self._intelligent_router = IntelligentRouter(
                     classifier=TaskClassifier(),
                     selector=ModelSelector(),
@@ -161,8 +185,12 @@ class CloudRouter:
                     budget_checker=self._budget,
                     routing_store=self._routing_store,
                     ml_classifier=ml_clf,
+                    mf_router=mf_router,
                 )
-                logger.info("[CloudRouter] IntelligentRouter initialized (hybrid=%s)", ml_clf is not None)
+                logger.info(
+                    "[CloudRouter] IntelligentRouter initialized (hybrid=%s, mf=%s)",
+                    ml_clf is not None, mf_router is not None,
+                )
             except Exception as exc:
                 logger.warning(
                     "[CloudRouter] IntelligentRouter init failed: %s", exc
