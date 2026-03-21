@@ -1005,6 +1005,14 @@ class SchedulerConfig:
     paged_ssd_cache_max_size: int = 50 * 1024 * 1024 * 1024  # 50GB for testing
     hot_cache_max_size: int = 0  # Disable hot cache to test P1 lz4 compression
 
+    # KVTC compression (Phase 3: optional KVTC backend for SSD blocks)
+    kvtc_enabled: bool = False  # Use KVTC compression (4-8x) instead of lz4 (2-3x)
+    kvtc_energy: float = 0.995  # PCA energy retention (0.9-0.999)
+    kvtc_bits: int = 4  # Quantization bits (2, 4, 8)
+    kvtc_group_size: int = 64  # Quantization group size
+    kvtc_adaptive: bool = False  # Auto-select KVTC/lz4 per block based on token count
+    kvtc_threshold: int = 2048  # Token count threshold: ≤threshold→KVTC, >threshold→lz4
+
     # Model identification (for cache isolation between different models)
     model_name: str = ""  # OpenAI API model name (e.g., "mlx-community/Llama-3.2-3B")
 
@@ -2802,12 +2810,16 @@ class Scheduler:
                 request.approx_zero_fill_count = approx_zero_fill_count
 
                 if skip_reason == 'full':
+                    # Profiling: Record Full Skip cache hit
+                    self._profiler.record_cache_hit("prefix_full")
                     logger.info(
                         f"✨ FULL SKIP enabled for request {request.request_id}: "
                         f"100% cache hit ({block_table.num_tokens} tokens), "
                         f"skipping prefill computation"
                     )
                 elif skip_reason == 'approximate':
+                    # Profiling: Record Approximate Skip cache hit
+                    self._profiler.record_cache_hit("prefix_approx")
                     logger.info(
                         f"⚡ APPROXIMATE SKIP enabled for request {request.request_id}: "
                         f"{cache_hit_ratio:.1%} cache hit "
@@ -2819,11 +2831,16 @@ class Scheduler:
                 request.skip_reason = 'none'
                 request.approx_zero_fill_count = 0
                 if cache_hit_ratio > 0:
+                    # Profiling: Record Partial cache hit
+                    self._profiler.record_cache_hit("prefix_partial")
                     logger.debug(
                         f"Request {request.request_id}: partial cache hit "
                         f"({cache_hit_ratio*100:.1f}%), "
                         f"prefill required for {len(remaining)} tokens"
                     )
+                else:
+                    # Profiling: Record cache miss
+                    self._profiler.record_cache_miss("prefix")
             if block_table and block_table.num_tokens > 0:
                 # Reconstruct actual KVCache objects from stored tensor data
                 # Note: reconstruct_cache may modify block_table in-place if
@@ -4243,8 +4260,16 @@ class Scheduler:
             print("❌ DEBUG: paged_ssd_cache_dir is None, cache disabled!")
             return
 
+        # Add model_name to cache_dir for cache isolation between models
+        model_cache_dir = Path(self.config.paged_ssd_cache_dir)
+        if self.config.model_name:
+            # Sanitize model_name for use in path (replace slashes and special chars)
+            safe_model_name = self.config.model_name.replace("/", "_").replace("\\", "_")
+            model_cache_dir = model_cache_dir / safe_model_name
+
         print(f"✅ DEBUG: Initializing PagedSSDCacheManager...")
-        print(f"   cache_dir={self.config.paged_ssd_cache_dir}")
+        print(f"   cache_dir={model_cache_dir}")
+        print(f"   model_name={self.config.model_name}")
         print(f"   max_size={self.config.paged_ssd_cache_max_size / (1024**3):.1f}GB")
         print(f"   hot_cache={self.config.hot_cache_max_size / (1024**3):.1f}GB")
 
@@ -4252,10 +4277,16 @@ class Scheduler:
             # Initialize paged SSD cache manager for SSD storage
             # Phase 3.1: Disable compression to test impact on writer performance
             self.paged_ssd_cache_manager = PagedSSDCacheManager(
-                cache_dir=Path(self.config.paged_ssd_cache_dir),
+                cache_dir=model_cache_dir,  # Use model-specific cache directory
                 max_size_bytes=self.config.paged_ssd_cache_max_size,
                 hot_cache_max_bytes=self.config.hot_cache_max_size,
                 enable_compression=False,  # Phase 3.1: Test without compression
+                kvtc_enabled=self.config.kvtc_enabled,
+                kvtc_energy=self.config.kvtc_energy,
+                kvtc_bits=self.config.kvtc_bits,
+                kvtc_group_size=self.config.kvtc_group_size,
+                kvtc_adaptive=self.config.kvtc_adaptive,
+                kvtc_threshold=self.config.kvtc_threshold,
             )
             print(f"✅ DEBUG: PagedSSDCacheManager initialized successfully!")
 

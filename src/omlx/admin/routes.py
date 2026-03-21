@@ -23,7 +23,7 @@ from typing import Any, Dict, Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .auth import (
     REMEMBER_ME_MAX_AGE,
@@ -119,6 +119,12 @@ class GlobalSettingsRequest(BaseModel):
     ssd_cache_max_size: Optional[str] = None
     hot_cache_max_size: Optional[str] = None  # "0" = disabled, "8GB", etc.
     initial_cache_blocks: Optional[int] = None  # Starting blocks (requires restart)
+    kvtc_enabled: Optional[bool] = None
+    kvtc_energy: Optional[float] = Field(None, ge=0.5, le=1.0)
+    kvtc_bits: Optional[int] = None
+    kvtc_group_size: Optional[int] = None
+    kvtc_adaptive: Optional[bool] = None
+    kvtc_threshold: Optional[int] = Field(None, ge=64, le=32768)
 
     # MCP settings
     mcp_config: Optional[str] = None
@@ -154,6 +160,25 @@ class GlobalSettingsRequest(BaseModel):
     # Auth settings
     api_key: Optional[str] = None
     skip_api_key_verification: Optional[bool] = None
+
+    # Cloud settings
+    cloud_enabled: Optional[bool] = None
+    cloud_deepseek_api_key: Optional[str] = None
+    cloud_openai_api_key: Optional[str] = None
+    cloud_glm_api_key: Optional[str] = None
+    cloud_gemini_api_key: Optional[str] = None
+    cloud_chatgpt_access_token: Optional[str] = None
+    cloud_daily_budget: Optional[float] = Field(None, ge=0)
+    cloud_monthly_budget: Optional[float] = Field(None, ge=0)
+    cloud_prefer_local: Optional[bool] = None
+    cloud_fallback_enabled: Optional[bool] = None
+    cloud_context_pilot_enabled: Optional[bool] = None
+    cloud_semantic_cache_enabled: Optional[bool] = None
+    cloud_semantic_cache_threshold: Optional[float] = Field(None, ge=0, le=1)
+    cloud_semantic_cache_ttl: Optional[int] = Field(None, ge=0)
+    cloud_conversation_store_enabled: Optional[bool] = None
+    cloud_max_queue_depth: Optional[int] = Field(None, ge=1)
+    cloud_agent_fair_share: Optional[float] = Field(None, ge=0, le=1)
 
 
 class HFDownloadRequest(BaseModel):
@@ -508,6 +533,14 @@ async def _apply_cache_settings_runtime(
         pool._scheduler_config.hot_cache_max_size = (
             global_settings.cache.get_hot_cache_max_size_bytes()
         )
+
+    # Push KVTC settings to scheduler config so reloaded models pick them up
+    pool._scheduler_config.kvtc_enabled = global_settings.cache.kvtc_enabled
+    pool._scheduler_config.kvtc_energy = global_settings.cache.kvtc_energy
+    pool._scheduler_config.kvtc_bits = global_settings.cache.kvtc_bits
+    pool._scheduler_config.kvtc_group_size = global_settings.cache.kvtc_group_size
+    pool._scheduler_config.kvtc_adaptive = global_settings.cache.kvtc_adaptive
+    pool._scheduler_config.kvtc_threshold = global_settings.cache.kvtc_threshold
 
     # Unload all loaded models so they use new config when reloaded
     loaded_models = pool.get_loaded_model_ids()
@@ -1579,6 +1612,12 @@ async def get_global_settings(is_admin: bool = Depends(require_admin)):
             ),
             "hot_cache_max_size": global_settings.cache.hot_cache_max_size,
             "initial_cache_blocks": global_settings.cache.initial_cache_blocks,
+            "kvtc_enabled": global_settings.cache.kvtc_enabled,
+            "kvtc_energy": global_settings.cache.kvtc_energy,
+            "kvtc_bits": global_settings.cache.kvtc_bits,
+            "kvtc_group_size": global_settings.cache.kvtc_group_size,
+            "kvtc_adaptive": global_settings.cache.kvtc_adaptive,
+            "kvtc_threshold": global_settings.cache.kvtc_threshold,
         },
         "mcp": {
             "config_path": global_settings.mcp.config_path,
@@ -1613,6 +1652,28 @@ async def get_global_settings(is_admin: bool = Depends(require_admin)):
             "opencode_model": global_settings.integrations.opencode_model,
             "openclaw_model": global_settings.integrations.openclaw_model,
             "openclaw_tools_profile": global_settings.integrations.openclaw_tools_profile,
+        },
+        "cloud": {
+            "enabled": global_settings.cloud.enabled,
+            "deepseek_api_key": global_settings.cloud.deepseek_api_key or "",
+            "openai_api_key": global_settings.cloud.openai_api_key or "",
+            "glm_api_key": global_settings.cloud.glm_api_key or "",
+            "gemini_api_key": global_settings.cloud.gemini_api_key or "",
+            "chatgpt_access_token": global_settings.cloud.chatgpt_access_token or "",
+            "daily_budget": global_settings.cloud.daily_budget,
+            "monthly_budget": global_settings.cloud.monthly_budget,
+            "prefer_local": global_settings.cloud.prefer_local,
+            "fallback_enabled": global_settings.cloud.fallback_enabled,
+            "context_pilot_enabled": global_settings.cloud.context_pilot_enabled,
+            "semantic_cache_enabled": global_settings.cloud.semantic_cache_enabled,
+            "semantic_cache_threshold": global_settings.cloud.semantic_cache_threshold,
+            "semantic_cache_ttl": global_settings.cloud.semantic_cache_ttl,
+            "conversation_store_enabled": global_settings.cloud.conversation_store_enabled,
+            "cloud_models": global_settings.cloud.cloud_models,
+            "max_queue_depth": global_settings.cloud.max_queue_depth,
+            "agent_fair_share": global_settings.cloud.agent_fair_share,
+            "concurrency": global_settings.cloud.concurrency,
+            "conversation_db_path": global_settings.cloud.conversation_db_path,
         },
         "system": {
             "total_memory_bytes": memory_info["total_bytes"],
@@ -1751,6 +1812,24 @@ async def update_global_settings(
         cache_changed = True
     if request.initial_cache_blocks is not None:
         global_settings.cache.initial_cache_blocks = request.initial_cache_blocks
+    if request.kvtc_enabled is not None:
+        global_settings.cache.kvtc_enabled = request.kvtc_enabled
+        cache_changed = True
+    if request.kvtc_energy is not None:
+        global_settings.cache.kvtc_energy = request.kvtc_energy
+        cache_changed = True
+    if request.kvtc_bits is not None:
+        global_settings.cache.kvtc_bits = request.kvtc_bits
+        cache_changed = True
+    if request.kvtc_group_size is not None:
+        global_settings.cache.kvtc_group_size = request.kvtc_group_size
+        cache_changed = True
+    if request.kvtc_adaptive is not None:
+        global_settings.cache.kvtc_adaptive = request.kvtc_adaptive
+        cache_changed = True
+    if request.kvtc_threshold is not None:
+        global_settings.cache.kvtc_threshold = request.kvtc_threshold
+        cache_changed = True
 
     if cache_changed:
         success, msg = await _apply_cache_settings_runtime(
@@ -1886,6 +1965,66 @@ async def update_global_settings(
             f"codex={global_settings.integrations.codex_model}, "
             f"opencode={global_settings.integrations.opencode_model}, "
             f"openclaw={global_settings.integrations.openclaw_model}"
+        )
+
+    # Apply cloud settings
+    cloud_changed = False
+    if request.cloud_enabled is not None:
+        global_settings.cloud.enabled = request.cloud_enabled
+        cloud_changed = True
+    if "cloud_deepseek_api_key" in request.model_fields_set:
+        global_settings.cloud.deepseek_api_key = request.cloud_deepseek_api_key or None
+        cloud_changed = True
+    if "cloud_openai_api_key" in request.model_fields_set:
+        global_settings.cloud.openai_api_key = request.cloud_openai_api_key or None
+        cloud_changed = True
+    if "cloud_glm_api_key" in request.model_fields_set:
+        global_settings.cloud.glm_api_key = request.cloud_glm_api_key or None
+        cloud_changed = True
+    if "cloud_gemini_api_key" in request.model_fields_set:
+        global_settings.cloud.gemini_api_key = request.cloud_gemini_api_key or None
+        cloud_changed = True
+    if "cloud_chatgpt_access_token" in request.model_fields_set:
+        global_settings.cloud.chatgpt_access_token = request.cloud_chatgpt_access_token or None
+        cloud_changed = True
+    if request.cloud_daily_budget is not None:
+        global_settings.cloud.daily_budget = request.cloud_daily_budget
+        cloud_changed = True
+    if request.cloud_monthly_budget is not None:
+        global_settings.cloud.monthly_budget = request.cloud_monthly_budget
+        cloud_changed = True
+    if request.cloud_prefer_local is not None:
+        global_settings.cloud.prefer_local = request.cloud_prefer_local
+        cloud_changed = True
+    if request.cloud_fallback_enabled is not None:
+        global_settings.cloud.fallback_enabled = request.cloud_fallback_enabled
+        cloud_changed = True
+    if request.cloud_context_pilot_enabled is not None:
+        global_settings.cloud.context_pilot_enabled = request.cloud_context_pilot_enabled
+        cloud_changed = True
+    if request.cloud_semantic_cache_enabled is not None:
+        global_settings.cloud.semantic_cache_enabled = request.cloud_semantic_cache_enabled
+        cloud_changed = True
+    if request.cloud_semantic_cache_threshold is not None:
+        global_settings.cloud.semantic_cache_threshold = request.cloud_semantic_cache_threshold
+        cloud_changed = True
+    if request.cloud_semantic_cache_ttl is not None:
+        global_settings.cloud.semantic_cache_ttl = request.cloud_semantic_cache_ttl
+        cloud_changed = True
+    if request.cloud_conversation_store_enabled is not None:
+        global_settings.cloud.conversation_store_enabled = request.cloud_conversation_store_enabled
+        cloud_changed = True
+    if request.cloud_max_queue_depth is not None:
+        global_settings.cloud.max_queue_depth = request.cloud_max_queue_depth
+        cloud_changed = True
+    if request.cloud_agent_fair_share is not None:
+        global_settings.cloud.agent_fair_share = request.cloud_agent_fair_share
+        cloud_changed = True
+
+    if cloud_changed:
+        runtime_applied.append("cloud")
+        logger.info(
+            f"Cloud settings updated: enabled={global_settings.cloud.enabled}"
         )
 
     # Apply UI settings
@@ -2580,6 +2719,7 @@ async def start_benchmark(
     """
     from .benchmark import (
         BenchmarkRequest,
+        cancel_running_benchmarks,
         cleanup_old_runs,
         create_run,
         run_benchmark,
@@ -2606,6 +2746,15 @@ async def start_benchmark(
             status_code=400,
             detail=f"Model {bench_request.model_id} is not a supported model (type: {entry.model_type})",
         )
+
+    # Cancel any running benchmarks first to prevent memory doubling
+    cancelled = await cancel_running_benchmarks()
+    if cancelled > 0:
+        import gc
+        import mlx.core as mx
+        mx.clear_cache()
+        gc.collect()
+        logger.info(f"Cancelled {cancelled} running benchmark(s), memory cleared")
 
     # Cleanup old runs
     cleanup_old_runs()

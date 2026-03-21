@@ -3,8 +3,12 @@
 使用 Admin Panel 的 benchmark 方法测试 - 收集性能分析数据
 """
 import asyncio
+import os
 import sys
 from pathlib import Path
+
+# 启用 profiling
+os.environ["OMLX_ENABLE_PROFILING"] = "true"
 
 # 添加 src 路径
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -12,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from omlx.admin.benchmark import create_run, run_benchmark, BenchmarkRequest
 from omlx.engine_pool import EnginePool
 from omlx.scheduler import SchedulerConfig
+from omlx.profiling import get_global_profiler
 
 async def main():
     print("="*80)
@@ -91,6 +96,45 @@ async def main():
         print("💡 性能对比（查看上面的 scheduler profiling 输出）：")
         print("   - 直接测试: 79.8 tok/s (12.52 ms/tok, batch_gen=12.46ms)")
         print("   - Benchmark: 查看上面的 ⏱️ Perf 输出")
+
+        # 保存 profiling 报告
+        print()
+        print("="*80)
+        print("📊 Profiling 报告")
+        print("="*80)
+
+        profiler = get_global_profiler()
+        if profiler.enabled:
+            # 打印统计
+            profiler.print_stats(top_n=30, min_percent=0.5)
+
+            # 保存 JSON
+            json_path = "/tmp/mlx_lm_profiler_report.json"
+            profiler.save_json(json_path)
+            print(f"\n✅ Profiler 报告已保存: {json_path}")
+
+            # 简单分析
+            import json
+            with open(json_path) as f:
+                data = json.load(f)
+
+            summary = data["summary"]
+            cache_stats = data.get("cache_stats", {})
+
+            print("\n" + "="*80)
+            print("🔍 性能瓶颈分析")
+            print("="*80)
+            print(f"\n📊 整体指标:")
+            print(f"  总请求数:        {summary.get('total_requests', 0)}")
+            print(f"  Cache 命中率:    {summary.get('cache_hit_rate', 0):.2%}")
+
+            if cache_stats:
+                print(f"\n💾 Cache 统计:")
+                for cache_type, stats in cache_stats.items():
+                    print(f"  {cache_type:<20} {stats['hits']:>6} hits, {stats['misses']:>6} misses, {stats['hit_rate']:>6.2%}")
+
+        else:
+            print("⚠️  Profiling 未启用")
 
     except Exception as e:
         print(f"❌ Benchmark 失败: {e}")

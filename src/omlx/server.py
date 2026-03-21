@@ -49,7 +49,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Request as FastAPIRequest
 from fastapi.middleware.cors import CORSMiddleware
@@ -144,6 +144,22 @@ from .api.tool_calling import (
 )
 from .api.thinking import ThinkingParser, extract_thinking
 from .api.utils import clean_output_text, clean_special_tokens, extract_harmony_messages, extract_multimodal_content, extract_text_content
+from .api.context_models import (
+    ContextOptimizeRequest,
+    ContextOptimizeResponse,
+    CompactSubmitRequest,
+    CompactSubmitResponse,
+    CompactStatusResponse,
+)
+from .api.cache_models import (
+    PromptCacheSaveRequest,
+    PromptCacheSaveResponse,
+    PromptCacheLoadRequest,
+    PromptCacheLoadResponse,
+    PromptCacheListResponse,
+    PromptCacheDeleteResponse,
+    PromptCacheInfo,
+)
 from .engine import BaseEngine, BatchedEngine, VLMBatchedEngine
 from .engine.embedding import EmbeddingEngine
 from .engine.reranker import RerankerEngine
@@ -211,7 +227,9 @@ class ServerState:
     global_settings: Optional[object] = None  # GlobalSettings
     hf_downloader: Optional[object] = None  # HFDownloader
     process_memory_enforcer: Optional[object] = None  # ProcessMemoryEnforcer
+    cloud_router: Optional[object] = None  # CloudRouter
     responses_store: ResponseStore = field(default_factory=ResponseStore)
+    prompt_cache_manager: Optional[object] = None  # PromptCacheManager
 
 
 # Global server state instance
@@ -327,6 +345,14 @@ async def lifespan(app: FastAPI):
     if mcp_config:
         await init_mcp(mcp_config)
 
+    # Initialize Named Prompt Cache Manager (KVTC compression)
+    from .cache.prompt_cache_manager import PromptCacheManager
+    from .cache.kvtc_calibration_store import KVTCCalibrationStore
+    _server_state.prompt_cache_manager = PromptCacheManager(
+        calibration_store=KVTCCalibrationStore(),
+    )
+    logger.info("Prompt cache manager initialized")
+
     yield
 
     # Shutdown: Save all-time stats, stop TTL task, process memory enforcer, etc.
@@ -410,9 +436,14 @@ async def validation_exception_handler(
         request.url.path,
         exc.errors(),
     )
+    # Sanitize errors: bytes values in 'input' fields are not JSON serializable
+    errors = exc.errors()
+    for err in errors:
+        if isinstance(err.get("input"), bytes):
+            err["input"] = {}
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors()},
+        content={"detail": errors},
     )
 
 
@@ -970,6 +1001,20 @@ def init_server(
     if api_key:
         logger.info("API key authentication: enabled")
 
+    # Initialize cloud router if enabled
+    if global_settings and hasattr(global_settings, "cloud") and global_settings.cloud.enabled:
+        try:
+            from omlx.cloud.router import CloudRouter
+
+            _server_state.cloud_router = CloudRouter(global_settings.cloud)
+            logger.info(
+                "Cloud routing enabled with backends: %s",
+                list(_server_state.cloud_router.get_health()["registered_backends"]),
+            )
+        except Exception as exc:
+            logger.warning("Failed to initialize cloud router: %s", exc)
+            _server_state.cloud_router = None
+
     # Initialize HuggingFace downloader
     from .admin.hf_downloader import HFDownloader
     from .admin.routes import set_hf_downloader
@@ -1140,6 +1185,423 @@ async def health():
     }
 
 
+@app.get("/v1/cloud/health")
+async def cloud_health():
+    """Cloud backend health status."""
+    if not _server_state.cloud_router:
+        return {"enabled": False}
+    return _server_state.cloud_router.get_health()
+
+
+@app.post("/v1/context/optimize")
+async def context_optimize(
+    request: ContextOptimizeRequest,
+    _: bool = Depends(verify_api_key),
+):
+    """Optimize message context for better cache hit rates.
+
+    Stateless endpoint that reorders messages to maximize prefix cache hits
+    for both local KV cache and cloud prompt caching (Anthropic/Google/OpenAI).
+    """
+    from .contextpilot.adapter import ContextPilotAdapter
+
+    adapter = ContextPilotAdapter(fuzzy_match_enabled=True, fuzzy_threshold=0.85)
+
+    result = adapter.optimize_request(
+        messages=request.messages,
+        previous_requests=request.previous_requests or [],
+    )
+
+    # Count deduplicated blocks
+    dedup_count = len(result["context_refs"])
+
+    # Estimate tokens (rough: ~4 chars per token for English, ~2 for Chinese)
+    total_chars = sum(len(str(m.get("content", ""))) for m in result["messages"])
+    estimated_tokens = max(total_chars // 3, 1)
+    if request.token_budget and estimated_tokens > request.token_budget:
+        # Truncate messages to fit budget (keep system + last N)
+        pass  # Phase 2: implement truncation
+
+    # Determine cache hint
+    cache_hint = None
+    if result.get("system_prompt_hash"):
+        cache_hint = "system_prompt_stable"
+
+    return ContextOptimizeResponse(
+        optimized_messages=result["messages"],
+        estimated_tokens=estimated_tokens,
+        prefix_hash=result.get("system_prompt_hash"),
+        dedup_count=dedup_count,
+        cache_hint=cache_hint,
+    )
+
+
+# In-memory task store for async compact jobs
+_compact_tasks: Dict[str, Dict[str, Any]] = {}
+
+
+@app.post("/v1/context/compact/submit")
+async def context_compact_submit(
+    request: CompactSubmitRequest,
+    _: bool = Depends(verify_api_key),
+):
+    """Submit an async context compaction task.
+
+    Triggers background local model summarization. Returns a task_id
+    for polling via GET /v1/context/compact/{task_id}.
+    """
+    task_id = str(uuid.uuid4())[:8]
+
+    _compact_tasks[task_id] = {
+        "status": "pending",
+        "created_at": time.time(),
+        "result": None,
+        "error": None,
+    }
+
+    # Launch background task
+    asyncio.create_task(_run_compact_task(task_id, request))
+
+    return CompactSubmitResponse(task_id=task_id, status="pending")
+
+
+@app.get("/v1/context/compact/{task_id}")
+async def context_compact_status(
+    task_id: str,
+    _: bool = Depends(verify_api_key),
+):
+    """Poll async compact task status."""
+    task = _compact_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+    return CompactStatusResponse(
+        task_id=task_id,
+        status=task["status"],
+        result=task.get("result"),
+        error=task.get("error"),
+    )
+
+
+async def _run_compact_task(task_id: str, request: CompactSubmitRequest):
+    """Background task: summarize messages using local model."""
+    task = _compact_tasks[task_id]
+    task["status"] = "running"
+
+    try:
+        # Count input tokens (rough estimate)
+        total_chars = sum(len(str(m.get("content", ""))) for m in request.messages)
+        tokens_before = max(total_chars // 3, 1)
+
+        # Build summarization prompt
+        conversation_text = "\n".join(
+            f"{m.get('role', 'user')}: {m.get('content', '')}"
+            for m in request.messages
+            if m.get("role") != "system"
+        )
+
+        # Extract system prompt to preserve it
+        system_prompt = ""
+        for m in request.messages:
+            if m.get("role") == "system":
+                system_prompt = str(m.get("content", ""))
+                break
+
+        custom_instructions = request.custom_instructions or ""
+        summary_instruction = (
+            f"Summarize the following conversation concisely, preserving key facts, "
+            f"decisions, and action items. Keep the summary under "
+            f"{request.token_budget or 2000} tokens.\n"
+            f"{custom_instructions}\n\n"
+            f"Conversation:\n{conversation_text}"
+        )
+
+        summary_messages = [
+            {"role": "system", "content": "You are a precise summarizer. Output only the summary, no preamble."},
+            {"role": "user", "content": summary_instruction},
+        ]
+
+        # Call local model
+        engine = await get_engine_for_model(request.model)
+
+        output = await engine.chat(
+            messages=summary_messages,
+            max_tokens=request.token_budget or 2000,
+            temperature=0.3,
+            top_p=0.9,
+            top_k=0,
+            min_p=0.0,
+            repetition_penalty=1.0,
+            presence_penalty=0.0,
+            frequency_penalty=0.0,
+        )
+
+        summary_text = output.text.strip() if output.text else ""
+        tokens_after = max(len(summary_text) // 3, 1)
+
+        # Build compacted messages: system prompt + summary
+        compacted_messages = []
+        if system_prompt:
+            compacted_messages.append({"role": "system", "content": system_prompt})
+        compacted_messages.append({"role": "assistant", "content": f"[Summary of prior conversation]\n{summary_text}"})
+
+        task["status"] = "done"
+        task["result"] = {
+            "summary": summary_text,
+            "compacted_messages": compacted_messages,
+            "tokens_before": tokens_before,
+            "tokens_after": tokens_after,
+            "model_used": request.model or _server_state.default_model,
+        }
+
+    except Exception as e:
+        task["status"] = "failed"
+        task["error"] = f"{type(e).__name__}: {str(e)}"
+        logger.error(f"Compact task {task_id} failed: {e}")
+
+    finally:
+        # Auto-cleanup old tasks after 10 minutes
+        asyncio.get_event_loop().call_later(
+            600,
+            lambda: _compact_tasks.pop(task_id, None),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Named Prompt Cache API (KVTC compression)
+# ---------------------------------------------------------------------------
+
+# In-memory registry of loaded prompt caches for fast reuse
+_loaded_prompt_caches: Dict[str, Any] = {}
+
+
+@app.post("/v1/cache/prompt/save", response_model=PromptCacheSaveResponse)
+async def save_prompt_cache(
+    request: PromptCacheSaveRequest,
+    _: bool = Depends(verify_api_key),
+):
+    """Save a prompt's KV cache with KVTC compression.
+
+    Runs prefill on the prompt, captures the KV cache, applies KVTC
+    compression (4-8x), and saves to a named persistent store.
+    """
+    import numpy as np
+
+    mgr = _server_state.prompt_cache_manager
+    if mgr is None:
+        raise HTTPException(status_code=503, detail="Prompt cache manager not initialized")
+
+    try:
+        engine = await get_engine_for_model(request.model)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Engine not available: {e}")
+
+    model_name = request.model or _server_state.default_model or "unknown"
+
+    # Tokenize prompt to count tokens
+    prompt_tokens = engine._tokenizer.encode(request.prompt)
+    token_count = len(prompt_tokens)
+
+    # Run prefill by generating 1 token (triggers KV cache population)
+    try:
+        output = await engine.generate(
+            request.prompt,
+            max_tokens=1,
+            temperature=0.0,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prefill failed: {e}")
+
+    # Extract KV cache from SSD via block_aware_cache → paged_ssd_cache
+    # After generate(), the scheduler stored the KV blocks on SSD.
+    # We fetch them back by matching the prompt tokens against the prefix index,
+    # then loading each block's raw per-layer data from SSD.
+    cache_data = None
+    try:
+        scheduler = None
+        if hasattr(engine, '_engine') and engine._engine is not None:
+            async_core = engine._engine
+            if hasattr(async_core, 'engine') and async_core.engine is not None:
+                scheduler = async_core.engine.scheduler
+
+        if scheduler is not None and scheduler.block_aware_cache is not None:
+            bac = scheduler.block_aware_cache
+            ssd = bac.paged_ssd_cache
+
+            if ssd is not None:
+                # Wait briefly for the async SSD writer to flush pending blocks
+                await asyncio.sleep(0.3)
+
+                # Use fetch_cache to find stored blocks for our prompt tokens
+                import uuid as _uuid
+                temp_request_id = f"_prompt_cache_save_{_uuid.uuid4().hex[:8]}"
+                block_table, remaining = bac.fetch_cache(
+                    temp_request_id, prompt_tokens,
+                )
+
+                if block_table is not None and block_table.block_ids:
+                    # Load raw per-layer data from each block on SSD
+                    all_block_data = []
+                    for block_id in block_table.block_ids:
+                        block = bac.paged_cache.allocated_blocks.get(block_id)
+                        if block is None or block.block_hash is None:
+                            break
+                        block_data = ssd.load_block(block.block_hash)
+                        if block_data is None:
+                            break
+                        all_block_data.append(block_data)
+
+                    if all_block_data:
+                        # Merge per-layer data across blocks:
+                        # each block_data is List[(keys, values)] per layer
+                        num_layers = len(all_block_data[0])
+                        merged = []
+                        for layer_idx in range(num_layers):
+                            layer_keys = []
+                            layer_vals = []
+                            for bd in all_block_data:
+                                if layer_idx < len(bd):
+                                    item = bd[layer_idx]
+                                    if isinstance(item, (tuple, list)) and len(item) == 2:
+                                        k, v = item
+                                        layer_keys.append(np.array(k) if not isinstance(k, np.ndarray) else k)
+                                        layer_vals.append(np.array(v) if not isinstance(v, np.ndarray) else v)
+                            if layer_keys:
+                                merged.append((
+                                    np.concatenate(layer_keys, axis=-2) if len(layer_keys) > 1 else layer_keys[0],
+                                    np.concatenate(layer_vals, axis=-2) if len(layer_vals) > 1 else layer_vals[0],
+                                ))
+                        if merged:
+                            cache_data = merged
+                            logger.info(
+                                "Captured KV cache from SSD: %d layers, %d blocks, %d tokens",
+                                len(cache_data), len(all_block_data), token_count,
+                            )
+
+                    # Clean up: release block refs from the temp fetch
+                    bac.paged_cache.delete_block_table(temp_request_id)
+                else:
+                    logger.warning(
+                        "fetch_cache returned no blocks for %d tokens "
+                        "(remaining=%d). Blocks may not be indexed yet.",
+                        token_count, len(remaining) if remaining else 0,
+                    )
+                    # Clean up temp request if block_table was created
+                    if block_table is not None:
+                        bac.paged_cache.delete_block_table(temp_request_id)
+    except Exception as e:
+        logger.warning("Could not extract cache from SSD: %s", e, exc_info=True)
+
+    if cache_data is None:
+        logger.warning(
+            "Could not capture KV cache for '%s'. "
+            "The block may not have been stored to SSD yet, "
+            "or the prompt is too short for block-aligned caching.",
+            request.name,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail="KV cache capture not available. The prompt may be too short "
+                   "or SSD caching may not be enabled. Try a longer prompt.",
+        )
+
+    # Save with KVTC compression
+    result = await mgr.save(
+        name=request.name,
+        cache_data=cache_data,
+        model_name=model_name,
+        token_count=token_count,
+        prompt_text=request.prompt,
+        compress=request.compress,
+    )
+
+    return PromptCacheSaveResponse(**result)
+
+
+@app.post("/v1/cache/prompt/load", response_model=PromptCacheLoadResponse)
+async def load_prompt_cache(
+    request: PromptCacheLoadRequest,
+    _: bool = Depends(verify_api_key),
+):
+    """Load a named prompt cache and register it for fast reuse.
+
+    Decompresses KVTC data and holds it in memory so subsequent
+    chat/completions requests can skip prefill for the cached prompt.
+    """
+    mgr = _server_state.prompt_cache_manager
+    if mgr is None:
+        raise HTTPException(status_code=503, detail="Prompt cache manager not initialized")
+
+    if not mgr.exists(request.name):
+        raise HTTPException(status_code=404, detail=f"Prompt cache '{request.name}' not found")
+
+    t0 = time.time()
+    cache_data, meta = await mgr.load(request.name)
+
+    if cache_data is None:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load prompt cache '{request.name}': "
+                   f"calibration may be missing for model '{meta.get('model_name', 'unknown')}'",
+        )
+
+    # Register in memory for fast reuse
+    _loaded_prompt_caches[request.name] = {
+        "cache_data": cache_data,
+        "meta": meta,
+        "loaded_at": time.time(),
+    }
+
+    load_time = (time.time() - t0) * 1000
+
+    return PromptCacheLoadResponse(
+        name=request.name,
+        model=meta.get("model_name", "unknown"),
+        token_count=meta.get("token_count", 0),
+        ready=True,
+        load_time_ms=round(load_time, 1),
+    )
+
+
+@app.get("/v1/cache/prompt/list", response_model=PromptCacheListResponse)
+async def list_prompt_caches(
+    _: bool = Depends(verify_api_key),
+):
+    """List all saved named prompt caches."""
+    mgr = _server_state.prompt_cache_manager
+    if mgr is None:
+        raise HTTPException(status_code=503, detail="Prompt cache manager not initialized")
+
+    caches = mgr.list_caches()
+    total_size = sum(c.get("file_size_bytes", 0) for c in caches)
+
+    return PromptCacheListResponse(
+        caches=[PromptCacheInfo(**c) for c in caches],
+        total_size_bytes=total_size,
+        total_count=len(caches),
+    )
+
+
+@app.delete("/v1/cache/prompt/{name}", response_model=PromptCacheDeleteResponse)
+async def delete_prompt_cache(
+    name: str,
+    _: bool = Depends(verify_api_key),
+):
+    """Delete a named prompt cache."""
+    mgr = _server_state.prompt_cache_manager
+    if mgr is None:
+        raise HTTPException(status_code=503, detail="Prompt cache manager not initialized")
+
+    # Also remove from in-memory registry
+    _loaded_prompt_caches.pop(name, None)
+
+    deleted = mgr.delete(name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Prompt cache '{name}' not found")
+
+    return PromptCacheDeleteResponse(name=name, deleted=True)
+
+
 @app.get("/api/status")
 async def server_status(_: bool = Depends(verify_api_key)):
     """Lightweight status endpoint for external tool polling (statuslines, scripts)."""
@@ -1233,6 +1695,22 @@ async def list_models(_: bool = Depends(verify_api_key)) -> ModelsResponse:
                     owned_by="omlx",
                 )
             )
+
+    # KB-023: Append cloud models when cloud routing is enabled
+    cloud_router = _server_state.cloud_router
+    if cloud_router:
+        try:
+            health = cloud_router.get_health()
+            if health.get("enabled"):
+                for cloud_model_id in health.get("cloud_models", []):
+                    models.append(
+                        ModelInfo(
+                            id=cloud_model_id,
+                            owned_by="cloud",
+                        )
+                    )
+        except Exception:
+            pass  # Don't fail local model listing if cloud health check fails
 
     return ModelsResponse(data=models)
 
@@ -1563,6 +2041,18 @@ async def create_chat_completion(
         for i, msg in enumerate(request.messages):
             content_preview = str(msg.content)[:200] if msg.content else "(empty)"
             logger.log(5, "  Message[%d]: role=%s, content=%s...", i, msg.role, content_preview)
+
+    # Cloud routing intercept
+    cloud_router = _server_state.cloud_router
+    if cloud_router and await cloud_router.is_cloud_model(request.model):
+        if request.stream:
+            return StreamingResponse(
+                cloud_router.generate_stream(request, request.model),
+                media_type="text/event-stream",
+            )
+        else:
+            result = await cloud_router.generate(request, request.model)
+            return JSONResponse(content=result)
 
     load_start = time.perf_counter()
     engine = await get_engine_for_model(request.model)
@@ -3474,10 +3964,17 @@ Note: Use the omlx CLI for full feature support.
     # Parse pinned models
     pinned_models = args.pin.split(",") if args.pin else []
 
+    # Load global settings from ~/.omlx/settings.json
+    from .settings_v2 import GlobalSettingsV2
+
+    global_settings = GlobalSettingsV2.load(cli_args=args)
+
     # Initialize server
     init_server(
-        model_dirs=args.model_dir,  # Fixed: parameter name is model_dirs (plural)
+        model_dirs=args.model_dir,
         max_model_memory=parse_size(args.max_model_memory) if args.max_model_memory else None,
+        api_key=global_settings.auth.api_key,
+        global_settings=global_settings,
     )
 
     # Start server

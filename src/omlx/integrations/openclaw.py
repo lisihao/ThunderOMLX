@@ -83,6 +83,21 @@ class OpenClawIntegration(Integration):
             config.setdefault("tools", {})
             config["tools"]["profile"] = tools_profile
 
+            # Configure ThunderOMLX ContextEngine plugin
+            config.setdefault("plugins", {}).setdefault("slots", {})
+            config.setdefault("plugins", {}).setdefault("entries", {})
+            config["plugins"]["slots"]["contextEngine"] = "@omlx/thunder-context"
+            config["plugins"]["entries"]["@omlx/thunder-context"] = {
+                "enabled": True,
+                "options": {
+                    "endpoint": f"http://{host}:{port}",
+                    "apiKey": api_key or "omlx",
+                    "timeout": 800,
+                    "fallbackThreshold": 3,
+                    "features": ["prefix_align", "semantic_dedup"],
+                },
+            }
+
         self._write_json_config(self.CONFIG_PATH, updater)
 
     def _gateway_info(self) -> tuple[str, int]:

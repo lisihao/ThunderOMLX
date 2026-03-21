@@ -31,6 +31,16 @@
                 auth: { api_key_set: false, api_key: '', skip_api_key_verification: false, sub_keys: [] },
                 claude_code: { context_scaling_enabled: false, target_context_size: 200000, mode: 'cloud', opus_model: null, sonnet_model: null, haiku_model: null },
                 integrations: { codex_model: null, opencode_model: null, openclaw_model: null, openclaw_tools_profile: 'full' },
+                cloud: {
+                    enabled: false,
+                    deepseek_api_key: '', openai_api_key: '', glm_api_key: '',
+                    gemini_api_key: '', chatgpt_access_token: '',
+                    daily_budget: 5.0, monthly_budget: 100.0,
+                    prefer_local: true, fallback_enabled: true,
+                    context_pilot_enabled: true, semantic_cache_enabled: true,
+                    semantic_cache_threshold: 0.85, semantic_cache_ttl: 14400,
+                    conversation_store_enabled: true,
+                },
                 ui: { language: 'en' },
                 system: { total_memory_bytes: 0, total_memory: '', auto_model_memory: '', ssd_total_bytes: 0, ssd_total: '' },
             },
@@ -60,6 +70,7 @@
 
             // Auth UI state
             showApiKey: false,
+            showCloudKeys: { deepseek: false, openai: false, glm: false, gemini: false, chatgpt: false },
             // Sub key management
             newSubKeyValue: '',
             newSubKeyName: '',
@@ -370,6 +381,7 @@
                             auth: { ...this.globalSettings.auth, ...data.auth },
                             claude_code: { ...this.globalSettings.claude_code, ...data.claude_code },
                             integrations: { ...this.globalSettings.integrations, ...data.integrations },
+                            cloud: { ...this.globalSettings.cloud, ...data.cloud },
                             system: { ...this.globalSettings.system, ...data.system },
                         };
                         this.globalSettings.ui = data.ui || { language: 'en' };
@@ -476,6 +488,12 @@
                             ssd_cache_max_size: this.globalSettings.cache.ssd_cache_max_size,
                             hot_cache_max_size: this.globalSettings.cache.hot_cache_max_size,
                             initial_cache_blocks: this.globalSettings.cache.initial_cache_blocks,
+                            kvtc_enabled: this.globalSettings.cache.kvtc_enabled,
+                            kvtc_energy: this.globalSettings.cache.kvtc_energy,
+                            kvtc_bits: this.globalSettings.cache.kvtc_bits,
+                            kvtc_group_size: this.globalSettings.cache.kvtc_group_size,
+                            kvtc_adaptive: this.globalSettings.cache.kvtc_adaptive,
+                            kvtc_threshold: this.globalSettings.cache.kvtc_threshold,
                             sampling_max_context_window: this.globalSettings.sampling.max_context_window,
                             sampling_max_tokens: this.globalSettings.sampling.max_tokens,
                             sampling_temperature: this.globalSettings.sampling.temperature,
@@ -947,6 +965,43 @@
                     }
                 } catch (err) {
                     console.error('Failed to save integration settings:', err);
+                }
+            },
+
+            saveCloudSettings() {
+                // KB-037: Debounce rapid toggle clicks (300ms)
+                if (this._cloudSaveTimer) clearTimeout(this._cloudSaveTimer);
+                this._cloudSaveTimer = setTimeout(() => this._doSaveCloudSettings(), 300);
+            },
+
+            async _doSaveCloudSettings() {
+                try {
+                    const response = await fetch('/admin/api/global-settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            cloud_enabled: this.globalSettings.cloud.enabled,
+                            cloud_deepseek_api_key: this.globalSettings.cloud.deepseek_api_key,
+                            cloud_openai_api_key: this.globalSettings.cloud.openai_api_key,
+                            cloud_glm_api_key: this.globalSettings.cloud.glm_api_key,
+                            cloud_gemini_api_key: this.globalSettings.cloud.gemini_api_key,
+                            cloud_chatgpt_access_token: this.globalSettings.cloud.chatgpt_access_token,
+                            cloud_daily_budget: this.globalSettings.cloud.daily_budget,
+                            cloud_monthly_budget: this.globalSettings.cloud.monthly_budget,
+                            cloud_prefer_local: this.globalSettings.cloud.prefer_local,
+                            cloud_fallback_enabled: this.globalSettings.cloud.fallback_enabled,
+                            cloud_context_pilot_enabled: this.globalSettings.cloud.context_pilot_enabled,
+                            cloud_semantic_cache_enabled: this.globalSettings.cloud.semantic_cache_enabled,
+                            cloud_semantic_cache_threshold: this.globalSettings.cloud.semantic_cache_threshold,
+                            cloud_semantic_cache_ttl: this.globalSettings.cloud.semantic_cache_ttl,
+                            cloud_conversation_store_enabled: this.globalSettings.cloud.conversation_store_enabled,
+                        }),
+                    });
+                    if (!response.ok) {
+                        console.error('Failed to save cloud settings');
+                    }
+                } catch (err) {
+                    console.error('Failed to save cloud settings:', err);
                 }
             },
 

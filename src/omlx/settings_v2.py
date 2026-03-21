@@ -292,12 +292,57 @@ class CacheSettingsV2(BaseModel):
             raise ValueError(f"Invalid {field_name}: {e}") from e
         return v
 
+    # KVTC compression (Phase 3: optional alternative to lz4 for SSD blocks)
+    kvtc_enabled: bool = Field(
+        default=False,
+        description="Use KVTC compression for SSD cache blocks (4-8x vs lz4 2-3x). "
+        "Requires per-model calibration on first use.",
+    )
+    kvtc_energy: float = Field(
+        default=0.995,
+        description="PCA energy retention threshold (0.9-0.999). "
+        "Higher = better quality, lower compression.",
+    )
+    kvtc_bits: int = Field(
+        default=4,
+        description="Quantization bit depth (2, 4, or 8). "
+        "Lower = more compression, slightly more loss.",
+    )
+    kvtc_group_size: int = Field(
+        default=64,
+        description="Quantization group size for per-group scaling.",
+    )
+    kvtc_adaptive: bool = Field(
+        default=False,
+        description="Automatically choose KVTC or lz4 per block based on token count. "
+        "KVTC for small blocks (faster SSD load), lz4 for large blocks (lower decode overhead).",
+    )
+    kvtc_threshold: int = Field(
+        default=2048,
+        description="Token count threshold for adaptive mode. "
+        "Blocks with token_count <= threshold use KVTC, otherwise lz4.",
+    )
+
     @field_validator("initial_cache_blocks")
     @classmethod
     def validate_initial_cache_blocks(cls, v: int) -> int:
         """Validate initial_cache_blocks is positive."""
         if v <= 0:
             raise ValueError(f"initial_cache_blocks must be > 0, got {v}")
+        return v
+
+    @field_validator("kvtc_energy")
+    @classmethod
+    def validate_kvtc_energy(cls, v: float) -> float:
+        if not (0.5 <= v <= 1.0):
+            raise ValueError(f"kvtc_energy must be 0.5-1.0, got {v}")
+        return v
+
+    @field_validator("kvtc_bits")
+    @classmethod
+    def validate_kvtc_bits(cls, v: int) -> int:
+        if v not in (2, 4, 8):
+            raise ValueError(f"kvtc_bits must be 2, 4, or 8, got {v}")
         return v
 
 
@@ -516,6 +561,55 @@ class IntegrationSettingsV2(BaseModel):
     openclaw_tools_profile: str = "coding"
 
 
+class CloudSettingsV2(BaseModel):
+    """Cloud backend settings for edge-cloud routing."""
+
+    enabled: bool = False
+
+    # API Keys
+    deepseek_api_key: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    glm_api_key: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    chatgpt_access_token: Optional[str] = None
+
+    # Budget
+    daily_budget: float = 5.0
+    monthly_budget: float = 100.0
+
+    # Routing
+    prefer_local: bool = True
+    fallback_enabled: bool = True
+
+    # Cloud model names
+    cloud_models: list[str] = [
+        "deepseek-r1", "deepseek-v3",
+        "glm-5", "glm-4-flash", "glm-4-plus",
+        "gpt-5.2", "gpt-5.1", "gpt-5.1-codex-max", "gpt-5.1-codex-mini",
+        "gpt-4o", "gpt-4o-mini",
+        "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2-flash", "gemini-2-pro",
+    ]
+
+    # Queue scheduling
+    max_queue_depth: int = 200
+    agent_fair_share: float = 0.6
+    concurrency: dict[str, int] = Field(
+        default_factory=lambda: {
+            "deepseek": 5, "glm": 5, "openai": 3, "chatgpt": 2, "gemini": 5,
+        }
+    )
+
+    # Context optimization
+    context_pilot_enabled: bool = True
+    semantic_cache_enabled: bool = True
+    semantic_cache_threshold: float = 0.85
+    semantic_cache_ttl: int = 14400
+
+    # Conversation store
+    conversation_store_enabled: bool = True
+    conversation_db_path: Optional[str] = None
+
+
 class GlobalSettingsV2(BaseSettings):
     """
     Global settings for oMLX using Pydantic v2.
@@ -549,6 +643,7 @@ class GlobalSettingsV2(BaseSettings):
     logging: LoggingSettingsV2 = Field(default_factory=LoggingSettingsV2)
     claude_code: ClaudeCodeSettingsV2 = Field(default_factory=ClaudeCodeSettingsV2)
     integrations: IntegrationSettingsV2 = Field(default_factory=IntegrationSettingsV2)
+    cloud: CloudSettingsV2 = Field(default_factory=CloudSettingsV2)
     ui: UISettingsV2 = Field(default_factory=UISettingsV2)
 
     @classmethod
@@ -760,6 +855,8 @@ class GlobalSettingsV2(BaseSettings):
                 self.claude_code = ClaudeCodeSettingsV2(**data["claude_code"])
             if "integrations" in data:
                 self.integrations = IntegrationSettingsV2(**data["integrations"])
+            if "cloud" in data:
+                self.cloud = CloudSettingsV2(**data["cloud"])
             if "ui" in data:
                 self.ui = UISettingsV2(**data["ui"])
 
@@ -860,6 +957,7 @@ class GlobalSettingsV2(BaseSettings):
             "logging": self.logging.model_dump(),
             "claude_code": self.claude_code.model_dump(),
             "integrations": self.integrations.model_dump(),
+            "cloud": self.cloud.model_dump(),
             "ui": self.ui.model_dump(),
         }
 
@@ -960,6 +1058,12 @@ class GlobalSettingsV2(BaseSettings):
             max_num_seqs=self.scheduler.max_num_seqs,
             completion_batch_size=self.scheduler.completion_batch_size,
             initial_cache_blocks=self.cache.initial_cache_blocks,
+            kvtc_enabled=self.cache.kvtc_enabled,
+            kvtc_energy=self.cache.kvtc_energy,
+            kvtc_bits=self.cache.kvtc_bits,
+            kvtc_group_size=self.cache.kvtc_group_size,
+            kvtc_adaptive=self.cache.kvtc_adaptive,
+            kvtc_threshold=self.cache.kvtc_threshold,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -988,6 +1092,7 @@ class GlobalSettingsV2(BaseSettings):
             "logging": self.logging.model_dump(),
             "claude_code": self.claude_code.model_dump(),
             "integrations": self.integrations.model_dump(),
+            "cloud": self.cloud.model_dump(),
             "ui": self.ui.model_dump(),
         }
 

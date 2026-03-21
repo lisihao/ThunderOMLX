@@ -75,6 +75,20 @@ from .hybrid_cache import (
     create_default_kvcache_config,
 )
 
+# KVTC codec (KV Cache Transform Coding, arXiv 2511.01815)
+from .kvtc_codec import (
+    KVTCCodecConfig,
+    KVTCTransformPlan,
+    KVTCSharedCalibration,
+    fit_shared_calibration,
+    fit_transform_plan,
+    encode_tensor,
+    decode_tensor,
+    encode_block_to_bytes,
+    decode_block_from_bytes,
+)
+from .kvtc_calibration_store import KVTCCalibrationStore
+
 __all__ = [
     # Stats
     "BaseCacheStats",
@@ -121,4 +135,15 @@ __all__ = [
     "LayerCacheConfig",
     "ModelCacheConfig",
     "create_default_kvcache_config",
+    # KVTC codec
+    "KVTCCodecConfig",
+    "KVTCTransformPlan",
+    "KVTCSharedCalibration",
+    "fit_shared_calibration",
+    "fit_transform_plan",
+    "encode_tensor",
+    "decode_tensor",
+    "encode_block_to_bytes",
+    "decode_block_from_bytes",
+    "KVTCCalibrationStore",
 ]

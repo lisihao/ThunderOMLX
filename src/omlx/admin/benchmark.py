@@ -88,6 +88,24 @@ def create_run(request: BenchmarkRequest) -> BenchmarkRun:
     return run
 
 
+async def cancel_running_benchmarks(timeout: float = 10.0) -> int:
+    """Cancel all currently running benchmarks and wait for them to finish.
+
+    Returns the number of benchmarks cancelled.
+    """
+    cancelled = 0
+    for bid, run in list(_benchmark_runs.items()):
+        if run.status == "running" and run.task is not None and not run.task.done():
+            run.task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(run.task), timeout=timeout)
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+                pass
+            cancelled += 1
+            logger.info(f"Cancelled running benchmark: {bid}")
+    return cancelled
+
+
 def cleanup_old_runs(max_runs: int = 10) -> None:
     """Remove old completed runs to prevent memory leaks."""
     completed = [
@@ -856,11 +874,19 @@ async def run_benchmark(run: BenchmarkRun, engine_pool: Any) -> None:
         run.status = "cancelled"
         await _send_event(run, {
             "type": "error",
-            "message": "Benchmark cancelled by user",
+            "message": "Benchmark cancelled",
         })
-        # Try to unload the model on cancellation
+        # Unload model and clear memory on cancellation
         try:
             await engine_pool._unload_engine(request.model_id)
+        except Exception:
+            pass
+        try:
+            import mlx.core as mx
+            import gc
+            mx.clear_cache()
+            gc.collect()
+            logger.info("Benchmark cancelled: memory cleanup complete")
         except Exception:
             pass
 

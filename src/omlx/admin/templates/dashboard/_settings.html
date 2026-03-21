@@ -85,7 +85,7 @@
                                         <input :type="showApiKey ? 'text' : 'password'"
                                                x-model="globalSettings.auth.api_key"
                                                placeholder="{{ t('settings.auth.api_key_placeholder') }}"
-                                               class="w-64 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all font-mono text-xs">
+                                               class="w-40 sm:w-64 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all font-mono text-xs">
                                         <button type="button" @click="showApiKey = !showApiKey; $nextTick(() => lucide.createIcons())"
                                                 class="p-2 rounded-lg hover:bg-neutral-100 transition-colors text-neutral-400 hover:text-neutral-600"
                                                 title="{{ t('settings.auth.toggle_visibility_tooltip') }}">
@@ -484,8 +484,74 @@
                                         <label class="text-sm text-neutral-700">{{ t('settings.cache.ssd_directory') }}</label>
                                     </div>
                                     <input type="text" x-model="globalSettings.cache.ssd_cache_dir"
-                                           class="w-64 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all font-mono text-xs">
+                                           class="w-40 sm:w-64 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all font-mono text-xs">
                                 </div>
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">{{ t('settings.cache.kvtc_enabled') }}</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cache.kvtc_enabled_hint') }}</p>
+                                    </div>
+                                    <button type="button" @click="globalSettings.cache.kvtc_enabled = !globalSettings.cache.kvtc_enabled"
+                                            :class="globalSettings.cache.kvtc_enabled ? 'bg-black' : 'bg-neutral-200'"
+                                            class="relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black">
+                                        <span :class="globalSettings.cache.kvtc_enabled ? 'translate-x-5' : 'translate-x-0'"
+                                              class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
+                                    </button>
+                                </div>
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">{{ t('settings.cache.kvtc_adaptive') }}</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cache.kvtc_adaptive_hint') }}</p>
+                                    </div>
+                                    <button type="button" @click="globalSettings.cache.kvtc_adaptive = !globalSettings.cache.kvtc_adaptive"
+                                            :class="globalSettings.cache.kvtc_adaptive ? 'bg-black' : 'bg-neutral-200'"
+                                            class="relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black">
+                                        <span :class="globalSettings.cache.kvtc_adaptive ? 'translate-x-5' : 'translate-x-0'"
+                                              class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
+                                    </button>
+                                </div>
+                                <template x-if="globalSettings.cache.kvtc_adaptive">
+                                    <div class="flex items-center justify-between px-6 py-4 bg-neutral-50">
+                                        <div>
+                                            <label class="text-sm text-neutral-700">{{ t('settings.cache.kvtc_threshold') }}</label>
+                                            <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cache.kvtc_threshold_hint') }}</p>
+                                        </div>
+                                        <div class="flex items-center gap-2">
+                                            <input type="number" x-model.number="globalSettings.cache.kvtc_threshold"
+                                                   min="64" max="32768" step="256"
+                                                   class="w-24 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all">
+                                            <span class="text-xs text-neutral-500">tokens</span>
+                                        </div>
+                                    </div>
+                                </template>
+                                <template x-if="globalSettings.cache.kvtc_enabled">
+                                    <div class="divide-y divide-neutral-100">
+                                        <div class="flex items-center justify-between px-6 py-4 bg-neutral-50">
+                                            <div>
+                                                <label class="text-sm text-neutral-700">{{ t('settings.cache.kvtc_bits') }}</label>
+                                                <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cache.kvtc_bits_hint') }}</p>
+                                            </div>
+                                            <select x-model.number="globalSettings.cache.kvtc_bits"
+                                                    class="w-24 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all">
+                                                <option value="2">2-bit</option>
+                                                <option value="4">4-bit</option>
+                                                <option value="8">8-bit</option>
+                                            </select>
+                                        </div>
+                                        <div class="flex items-center justify-between px-6 py-4 bg-neutral-50">
+                                            <div>
+                                                <label class="text-sm text-neutral-700">{{ t('settings.cache.kvtc_energy') }}</label>
+                                                <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cache.kvtc_energy_hint') }}</p>
+                                            </div>
+                                            <div class="flex items-center gap-2">
+                                                <input type="range" x-model.number="globalSettings.cache.kvtc_energy"
+                                                       min="0.9" max="0.999" step="0.001"
+                                                       class="w-24 accent-neutral-900">
+                                                <span class="text-xs text-neutral-500 w-12 text-right" x-text="globalSettings.cache.kvtc_energy"></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
                             </div>
                         </div>
 
@@ -575,8 +641,247 @@
                                 <div class="flex items-center justify-between px-6 py-4">
                                     <label class="text-sm text-neutral-700">{{ t('settings.mcp.config_path') }}</label>
                                     <input type="text" x-model="globalSettings.mcp.config_path" placeholder="{{ t('settings.mcp.config_placeholder') }}"
-                                           class="w-64 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all font-mono text-xs">
+                                           class="w-40 sm:w-64 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all font-mono text-xs">
                                 </div>
+                            </div>
+                        </div>
+
+                        <!-- Cloud Providers -->
+                        <div class="bg-white rounded-2xl border border-neutral-200 overflow-hidden">
+                            <div class="flex items-center justify-between px-6 py-4 bg-neutral-100 border-b border-neutral-200">
+                                <div class="flex items-center gap-3">
+                                    <i data-lucide="cloud" class="w-4 h-4 text-neutral-500"></i>
+                                    <span class="text-xs font-bold uppercase tracking-wider text-neutral-600">{{ t('settings.cloud.section_label') }}</span>
+                                </div>
+                                <span class="px-2 py-0.5 text-[10px] font-medium rounded-full bg-amber-50 text-amber-600 border border-amber-200">
+                                    {{ t('settings.cloud.restart_badge') }}
+                                </span>
+                            </div>
+                            <div class="divide-y divide-neutral-100">
+
+                                <!-- Enable Cloud Routing -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">{{ t('settings.cloud.enabled') }}</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cloud.enabled_hint') }}</p>
+                                    </div>
+                                    <button type="button"
+                                            @click="globalSettings.cloud.enabled = !globalSettings.cloud.enabled; saveCloudSettings()"
+                                            :class="globalSettings.cloud.enabled ? 'bg-black' : 'bg-neutral-200'"
+                                            class="relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black">
+                                        <span :class="globalSettings.cloud.enabled ? 'translate-x-5' : 'translate-x-0'"
+                                              class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
+                                    </button>
+                                </div>
+
+                                <!-- Prefer Local -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">{{ t('settings.cloud.prefer_local') }}</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cloud.prefer_local_hint') }}</p>
+                                    </div>
+                                    <button type="button"
+                                            @click="globalSettings.cloud.prefer_local = !globalSettings.cloud.prefer_local; saveCloudSettings()"
+                                            :class="globalSettings.cloud.prefer_local ? 'bg-black' : 'bg-neutral-200'"
+                                            class="relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black">
+                                        <span :class="globalSettings.cloud.prefer_local ? 'translate-x-5' : 'translate-x-0'"
+                                              class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
+                                    </button>
+                                </div>
+
+                                <!-- Fallback Enabled -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">{{ t('settings.cloud.fallback_enabled') }}</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cloud.fallback_hint') }}</p>
+                                    </div>
+                                    <button type="button"
+                                            @click="globalSettings.cloud.fallback_enabled = !globalSettings.cloud.fallback_enabled; saveCloudSettings()"
+                                            :class="globalSettings.cloud.fallback_enabled ? 'bg-black' : 'bg-neutral-200'"
+                                            class="relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black">
+                                        <span :class="globalSettings.cloud.fallback_enabled ? 'translate-x-5' : 'translate-x-0'"
+                                              class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
+                                    </button>
+                                </div>
+
+                                <!-- API Keys Sub-header -->
+                                <div class="px-6 py-3 bg-neutral-50">
+                                    <div class="flex items-center gap-2">
+                                        <i data-lucide="key" class="w-3.5 h-3.5 text-neutral-400"></i>
+                                        <span class="text-[10px] font-bold uppercase tracking-wider text-neutral-400">{{ t('settings.cloud.api_keys') }}</span>
+                                    </div>
+                                </div>
+
+                                <!-- DeepSeek API Key -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <label class="text-sm text-neutral-700">{{ t('settings.cloud.deepseek_key') }}</label>
+                                    <div class="flex items-center gap-2">
+                                        <input :type="showCloudKeys.deepseek ? 'text' : 'password'"
+                                               x-model="globalSettings.cloud.deepseek_api_key"
+                                               @change="saveCloudSettings()"
+                                               placeholder="sk-..."
+                                               class="w-40 sm:w-64 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all font-mono text-xs">
+                                        <button type="button" @click="showCloudKeys.deepseek = !showCloudKeys.deepseek"
+                                                class="p-2 rounded-lg hover:bg-neutral-100 transition-colors text-neutral-400 hover:text-neutral-600">
+                                            <svg x-show="!showCloudKeys.deepseek" class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>
+                                            <svg x-show="showCloudKeys.deepseek" class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></svg>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- OpenAI API Key -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <label class="text-sm text-neutral-700">{{ t('settings.cloud.openai_key') }}</label>
+                                    <div class="flex items-center gap-2">
+                                        <input :type="showCloudKeys.openai ? 'text' : 'password'"
+                                               x-model="globalSettings.cloud.openai_api_key"
+                                               @change="saveCloudSettings()"
+                                               placeholder="sk-..."
+                                               class="w-40 sm:w-64 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all font-mono text-xs">
+                                        <button type="button" @click="showCloudKeys.openai = !showCloudKeys.openai"
+                                                class="p-2 rounded-lg hover:bg-neutral-100 transition-colors text-neutral-400 hover:text-neutral-600">
+                                            <svg x-show="!showCloudKeys.openai" class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>
+                                            <svg x-show="showCloudKeys.openai" class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></svg>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- GLM API Key -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <label class="text-sm text-neutral-700">{{ t('settings.cloud.glm_key') }}</label>
+                                    <div class="flex items-center gap-2">
+                                        <input :type="showCloudKeys.glm ? 'text' : 'password'"
+                                               x-model="globalSettings.cloud.glm_api_key"
+                                               @change="saveCloudSettings()"
+                                               placeholder="..."
+                                               class="w-40 sm:w-64 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all font-mono text-xs">
+                                        <button type="button" @click="showCloudKeys.glm = !showCloudKeys.glm"
+                                                class="p-2 rounded-lg hover:bg-neutral-100 transition-colors text-neutral-400 hover:text-neutral-600">
+                                            <svg x-show="!showCloudKeys.glm" class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>
+                                            <svg x-show="showCloudKeys.glm" class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></svg>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Gemini API Key -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <label class="text-sm text-neutral-700">{{ t('settings.cloud.gemini_key') }}</label>
+                                    <div class="flex items-center gap-2">
+                                        <input :type="showCloudKeys.gemini ? 'text' : 'password'"
+                                               x-model="globalSettings.cloud.gemini_api_key"
+                                               @change="saveCloudSettings()"
+                                               placeholder="AIza..."
+                                               class="w-40 sm:w-64 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all font-mono text-xs">
+                                        <button type="button" @click="showCloudKeys.gemini = !showCloudKeys.gemini"
+                                                class="p-2 rounded-lg hover:bg-neutral-100 transition-colors text-neutral-400 hover:text-neutral-600">
+                                            <svg x-show="!showCloudKeys.gemini" class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>
+                                            <svg x-show="showCloudKeys.gemini" class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></svg>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- ChatGPT Access Token -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <label class="text-sm text-neutral-700">{{ t('settings.cloud.chatgpt_token') }}</label>
+                                    <div class="flex items-center gap-2">
+                                        <input :type="showCloudKeys.chatgpt ? 'text' : 'password'"
+                                               x-model="globalSettings.cloud.chatgpt_access_token"
+                                               @change="saveCloudSettings()"
+                                               placeholder="..."
+                                               class="w-40 sm:w-64 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all font-mono text-xs">
+                                        <button type="button" @click="showCloudKeys.chatgpt = !showCloudKeys.chatgpt"
+                                                class="p-2 rounded-lg hover:bg-neutral-100 transition-colors text-neutral-400 hover:text-neutral-600">
+                                            <svg x-show="!showCloudKeys.chatgpt" class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>
+                                            <svg x-show="showCloudKeys.chatgpt" class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/></svg>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Budget Sub-header -->
+                                <div class="px-6 py-3 bg-neutral-50">
+                                    <div class="flex items-center gap-2">
+                                        <i data-lucide="wallet" class="w-3.5 h-3.5 text-neutral-400"></i>
+                                        <span class="text-[10px] font-bold uppercase tracking-wider text-neutral-400">{{ t('settings.cloud.budget') }}</span>
+                                    </div>
+                                </div>
+
+                                <!-- Daily Budget -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <label class="text-sm text-neutral-700">{{ t('settings.cloud.daily_budget') }}</label>
+                                    <div class="flex items-center gap-1">
+                                        <span class="text-sm text-neutral-400">$</span>
+                                        <input type="number" x-model.number="globalSettings.cloud.daily_budget"
+                                               @change="saveCloudSettings()"
+                                               min="0" step="0.5"
+                                               class="w-24 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all">
+                                    </div>
+                                </div>
+
+                                <!-- Monthly Budget -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <label class="text-sm text-neutral-700">{{ t('settings.cloud.monthly_budget') }}</label>
+                                    <div class="flex items-center gap-1">
+                                        <span class="text-sm text-neutral-400">$</span>
+                                        <input type="number" x-model.number="globalSettings.cloud.monthly_budget"
+                                               @change="saveCloudSettings()"
+                                               min="0" step="1"
+                                               class="w-24 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all">
+                                    </div>
+                                </div>
+
+                                <!-- Optimization Sub-header -->
+                                <div class="px-6 py-3 bg-neutral-50">
+                                    <div class="flex items-center gap-2">
+                                        <i data-lucide="sparkles" class="w-3.5 h-3.5 text-neutral-400"></i>
+                                        <span class="text-[10px] font-bold uppercase tracking-wider text-neutral-400">{{ t('settings.cloud.optimization') }}</span>
+                                    </div>
+                                </div>
+
+                                <!-- ContextPilot -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">{{ t('settings.cloud.context_pilot') }}</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cloud.context_pilot_hint') }}</p>
+                                    </div>
+                                    <button type="button"
+                                            @click="globalSettings.cloud.context_pilot_enabled = !globalSettings.cloud.context_pilot_enabled; saveCloudSettings()"
+                                            :class="globalSettings.cloud.context_pilot_enabled ? 'bg-black' : 'bg-neutral-200'"
+                                            class="relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black">
+                                        <span :class="globalSettings.cloud.context_pilot_enabled ? 'translate-x-5' : 'translate-x-0'"
+                                              class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
+                                    </button>
+                                </div>
+
+                                <!-- Semantic Cache -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">{{ t('settings.cloud.semantic_cache') }}</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cloud.semantic_cache_hint') }}</p>
+                                    </div>
+                                    <button type="button"
+                                            @click="globalSettings.cloud.semantic_cache_enabled = !globalSettings.cloud.semantic_cache_enabled; saveCloudSettings()"
+                                            :class="globalSettings.cloud.semantic_cache_enabled ? 'bg-black' : 'bg-neutral-200'"
+                                            class="relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black">
+                                        <span :class="globalSettings.cloud.semantic_cache_enabled ? 'translate-x-5' : 'translate-x-0'"
+                                              class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
+                                    </button>
+                                </div>
+
+                                <!-- Conversation Store -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">{{ t('settings.cloud.conversation_store') }}</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cloud.conversation_store_hint') }}</p>
+                                    </div>
+                                    <button type="button"
+                                            @click="globalSettings.cloud.conversation_store_enabled = !globalSettings.cloud.conversation_store_enabled; saveCloudSettings()"
+                                            :class="globalSettings.cloud.conversation_store_enabled ? 'bg-black' : 'bg-neutral-200'"
+                                            class="relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black">
+                                        <span :class="globalSettings.cloud.conversation_store_enabled ? 'translate-x-5' : 'translate-x-0'"
+                                              class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
+                                    </button>
+                                </div>
+
                             </div>
                         </div>
 

@@ -147,6 +147,18 @@ class EngineCore:
 
         # Create scheduler
         scheduler_config = self.config.scheduler_config or SchedulerConfig()
+
+        # Set model_name for cache isolation if not already set
+        if not scheduler_config.model_name:
+            # Try to get model name from model config
+            if hasattr(model, 'config') and hasattr(model.config, 'name_or_path'):
+                scheduler_config.model_name = model.config.name_or_path
+            # Fallback: use a hash of the model object for cache isolation
+            elif hasattr(model, '__class__'):
+                scheduler_config.model_name = f"{model.__class__.__name__}_{id(model)}"
+            else:
+                scheduler_config.model_name = f"model_{id(model)}"
+
         self.scheduler = Scheduler(
             model=model,
             tokenizer=tokenizer,

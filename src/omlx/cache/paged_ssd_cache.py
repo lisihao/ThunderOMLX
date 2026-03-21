@@ -720,6 +720,21 @@ class PagedSSDCacheIndex:
                 self._total_size += (actual_size - entry.file_size)
                 entry.file_size = actual_size
 
+    def update_file_path_and_size(
+        self, block_hash: bytes, new_path: Path, actual_size: int,
+    ) -> None:
+        """Update file path and size after adaptive compression decision.
+
+        Called by writer thread when the compression format differs from
+        the initially predicted path (e.g. adaptive KVTC/lz4 selection).
+        """
+        with self._lock:
+            entry = self._index.get(block_hash)
+            if entry is not None:
+                self._total_size += (actual_size - entry.file_size)
+                entry.file_path = new_path
+                entry.file_size = actual_size
+
     def get_all_hashes(self) -> List[bytes]:
         """Get all indexed block hashes."""
         with self._lock:
@@ -789,6 +804,12 @@ class PagedSSDCacheManager(CacheManager):
         prefetch_interval: float = 10.0,
         enable_checksum: bool = True,
         checksum_verify_on_load: bool = True,
+        kvtc_enabled: bool = False,
+        kvtc_energy: float = 0.995,
+        kvtc_bits: int = 4,
+        kvtc_group_size: int = 64,
+        kvtc_adaptive: bool = False,
+        kvtc_threshold: int = 2048,
     ):
         """
         Initialize the SSD cache manager.
@@ -820,6 +841,29 @@ class PagedSSDCacheManager(CacheManager):
         self.compression_level = compression_level
         self.enable_checksum = enable_checksum
         self.checksum_verify_on_load = checksum_verify_on_load
+
+        # Phase 3: KVTC compression (optional, 4-8x vs lz4 2-3x)
+        self.kvtc_enabled = kvtc_enabled
+        self.kvtc_adaptive = kvtc_adaptive
+        self.kvtc_threshold = kvtc_threshold
+        self._kvtc_calibration = None  # Lazy: fitted on first save
+        self._kvtc_calibration_lock = threading.Lock()
+        # Init KVTC codec when globally enabled OR adaptive mode
+        if kvtc_enabled or kvtc_adaptive:
+            from .kvtc_codec import KVTCCodecConfig
+            from .kvtc_calibration_store import KVTCCalibrationStore
+
+            self._kvtc_config = KVTCCodecConfig(
+                energy=kvtc_energy,
+                bits=kvtc_bits,
+                group_size=kvtc_group_size,
+            )
+            self._kvtc_store = KVTCCalibrationStore(
+                calibrations_dir=Path(cache_dir) / "kvtc_calibrations",
+            )
+        else:
+            self._kvtc_config = None
+            self._kvtc_store = None
 
         # Disk usage cache for dynamic effective max size (30s TTL)
         self._disk_usage_cache = None  # type: shutil._ntuple_diskusage | None
@@ -899,10 +943,19 @@ class PagedSSDCacheManager(CacheManager):
             f"max_size={format_bytes(max_size_bytes)}{hot_info}, "
             f"existing_files={self._index.count}"
         )
-        logger.info(
-            f"🗜️ [P1] Compression: {'enabled' if self.enable_compression else 'disabled'} "
-            f"(lz4, level={self.compression_level})"
-        )
+        if self.kvtc_adaptive:
+            logger.info(
+                f"🧠 [Adaptive] Compression: KVTC ≤{self.kvtc_threshold} tok, "
+                f"lz4 >{self.kvtc_threshold} tok"
+            )
+        elif self.kvtc_enabled:
+            logger.info("🗜️ [KVTC] Compression: enabled (KVTC 4-8x, lossy)")
+        elif self.enable_compression:
+            logger.info(
+                f"🗜️ [P1] Compression: enabled (lz4, level={self.compression_level})"
+            )
+        else:
+            logger.info("🗜️ Compression: disabled (raw safetensors)")
 
         # --- P1-5: Smart Prefetch ---
         # Read from environment variable if not explicitly set
@@ -1225,7 +1278,13 @@ class PagedSSDCacheManager(CacheManager):
         hash_hex = block_hash.hex()
         subdir = hash_hex[0]  # First character
         # P1: Use .lz4 extension for lz4 compression (6x faster decompression)
-        ext = ".safetensors.lz4" if self.enable_compression else ".safetensors"
+        # Phase 3: .kvtc for global KVTC; adaptive defaults to lz4
+        if self.kvtc_enabled and not self.kvtc_adaptive:
+            ext = ".kvtc"
+        elif self.enable_compression:
+            ext = ".safetensors.lz4"
+        else:
+            ext = ".safetensors"
         filename = f"{hash_hex}{ext}"
         return self._cache_dir / subdir / filename
 
@@ -1242,8 +1301,8 @@ class PagedSSDCacheManager(CacheManager):
             if not subdir_path.exists():
                 continue
 
-            # Scan both .safetensors and .safetensors.zst files
-            for pattern in ["*.safetensors", "*.safetensors.zst"]:
+            # Scan all cache file formats
+            for pattern in ["*.safetensors", "*.safetensors.lz4", "*.safetensors.zst", "*.kvtc"]:
                 for file_path in subdir_path.glob(pattern):
                     scanned += 1
                     try:
@@ -1274,6 +1333,52 @@ class PagedSSDCacheManager(CacheManager):
             return None
 
         try:
+            # Phase 3: KVTC files have a custom binary format (not safetensors)
+            if file_path.suffix == '.kvtc':
+                with open(file_path, 'rb') as f:
+                    header_len_bytes = f.read(4)
+                    if len(header_len_bytes) < 4:
+                        return None
+                    header_len = struct.unpack("<I", header_len_bytes)[0]
+                    header_bytes = f.read(header_len)
+                    if len(header_bytes) < header_len:
+                        return None
+                metadata = json.loads(header_bytes.decode("utf-8"))
+
+                block_hash_hex = metadata.get("block_hash", "")
+                if not block_hash_hex:
+                    return None
+
+                file_stat = file_path.stat()
+
+                layer_cache_types = None
+                if "layer_cache_types" in metadata and metadata["layer_cache_types"]:
+                    try:
+                        layer_cache_types = json.loads(metadata["layer_cache_types"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+                layer_meta_states = None
+                if "layer_meta_states" in metadata and metadata["layer_meta_states"]:
+                    try:
+                        raw_meta_states = json.loads(metadata["layer_meta_states"])
+                        layer_meta_states = [tuple(m) if m else () for m in raw_meta_states]
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+                return PagedSSDBlockMetadata(
+                    block_hash=bytes.fromhex(block_hash_hex),
+                    file_path=file_path,
+                    file_size=file_stat.st_size,
+                    token_count=int(metadata.get("token_count", 0)),
+                    created_at=file_stat.st_ctime,
+                    last_access=file_stat.st_mtime,
+                    num_layers=int(metadata.get("num_layers", 0)),
+                    model_name=metadata.get("model_name", ""),
+                    layer_cache_types=layer_cache_types,
+                    layer_meta_states=layer_meta_states,
+                )
+
             # P1: Decompress if needed (supports both .lz4 and legacy .zst)
             if file_path.suffix in ('.lz4', '.zst'):
                 import tempfile
@@ -1413,11 +1518,12 @@ class PagedSSDCacheManager(CacheManager):
 
             try:
                 # Write safetensors file using pure Python (no mx/Metal API)
-                # PERF: Directory already created by _init_directories(), skip mkdir check (~6s saved!)
                 # Phase 3.2: Add thread_id to temp file name to avoid conflicts
                 temp_path = file_path.with_name(
                     file_path.stem + f"_tmp_{thread_id}.safetensors"
                 )
+                # Ensure parent dir exists (defensive — covers fresh tempdirs)
+                temp_path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Phase 1 Step 2: Choose write method based on item format
                 if use_numpy_write:
@@ -1443,35 +1549,70 @@ class PagedSSDCacheManager(CacheManager):
                         str(temp_path), tensors_raw, metadata
                     )
 
-                # P1: Compress with lz4 if enabled (6x faster than zlib)
-                if self.enable_compression:
-                    with open(temp_path, 'rb') as f:
-                        raw_data = f.read()
-                    raw_size = len(raw_data)
+                # P1 / Phase 3: Compress with KVTC or lz4
+                # Determine whether to use KVTC for this block
+                token_count = int(metadata.get("token_count", 0))
+                use_kvtc_for_block = False
+                if use_numpy_write:
+                    if self.kvtc_adaptive:
+                        # Adaptive: KVTC for small blocks, lz4 for large
+                        use_kvtc_for_block = token_count <= self.kvtc_threshold
+                    elif self.kvtc_enabled:
+                        # Global: always try KVTC
+                        use_kvtc_for_block = True
 
-                    # Use lz4 compression (significantly faster than zlib)
+                if use_kvtc_for_block:
+                    # --- KVTC compression path ---
                     compress_start = time.time()
-                    compressed_data = lz4.frame.compress(raw_data, compression_level=self.compression_level)
-                    compress_elapsed = (time.time() - compress_start) * 1000
-                    compressed_size = len(compressed_data)
+                    # Derive .kvtc path (file_path may be .lz4 in adaptive mode)
+                    hash_hex = block_hash.hex()
+                    kvtc_path = file_path.parent / f"{hash_hex}.kvtc"
+                    kvtc_ok = False
+                    try:
+                        kvtc_ok = self._kvtc_compress_block(
+                            arrays_as_numpy, metadata, kvtc_path, block_hash,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"KVTC compression failed for {hash_hex[:16]}, "
+                            f"falling back to lz4: {e}"
+                        )
 
-                    with open(file_path, 'wb') as f:
-                        f.write(compressed_data)
+                    if kvtc_ok:
+                        temp_path.unlink(missing_ok=True)
+                        actual_size = kvtc_path.stat().st_size
+                        compress_elapsed = (time.time() - compress_start) * 1000
+                        backend_label = "Adaptive-KVTC" if self.kvtc_adaptive else "KVTC"
+                        logger.info(
+                            f"🗜️ [{backend_label}] Compressed block {hash_hex[:16]} "
+                            f"({token_count} tok): "
+                            f"{actual_size} bytes, {compress_elapsed:.1f}ms"
+                        )
+                        # Update index with actual .kvtc path and size
+                        self._index.update_file_path_and_size(
+                            block_hash, kvtc_path, actual_size,
+                        )
+                    else:
+                        # Fallback to lz4
+                        lz4_path = self._lz4_compress_and_rename(
+                            temp_path, file_path, block_hash,
+                        )
+                        actual_size = lz4_path.stat().st_size
+                        self._index.update_file_path_and_size(
+                            block_hash, lz4_path, actual_size,
+                        )
 
-                    temp_path.unlink()
-                    actual_size = compressed_size
-
-                    logger.info(
-                        f"🗜️ [P1 lz4] Compressed block {block_hash.hex()[:16]}: "
-                        f"{raw_size} → {compressed_size} bytes "
-                        f"({compressed_size / raw_size * 100:.1f}%), {compress_elapsed:.1f}ms"
+                elif self.enable_compression:
+                    # --- Standard lz4 compression path ---
+                    lz4_path = self._lz4_compress_and_rename(
+                        temp_path, file_path, block_hash,
                     )
+                    actual_size = lz4_path.stat().st_size
+                    self._index.update_file_size(block_hash, actual_size)
                 else:
                     # Atomic rename to final path
                     os.rename(str(temp_path), str(file_path))
-
-                # Update index with actual file size
-                self._index.update_file_size(block_hash, actual_size)
+                    self._index.update_file_size(block_hash, actual_size)
 
                 # Check if block was evicted while write was pending
                 if not self._index.contains(block_hash):
@@ -1507,6 +1648,277 @@ class PagedSSDCacheManager(CacheManager):
                 # When hot cache is disabled, remove temporary read buffer entry
                 if not self._hot_cache_enabled:
                     self._hot_cache_remove(block_hash)
+
+    # ------------------------------------------------------------------
+    # Phase 3: KVTC / lz4 compression helpers (called from writer thread)
+    # ------------------------------------------------------------------
+
+    def _lz4_compress_and_rename(
+        self, temp_path: Path, file_path: Path, block_hash: bytes,
+    ) -> Path:
+        """Read temp safetensors, lz4-compress, write to final path.
+
+        Returns:
+            Actual file path written (may differ from input if extension was fixed).
+        """
+        with open(temp_path, 'rb') as f:
+            raw_data = f.read()
+        raw_size = len(raw_data)
+
+        compress_start = time.time()
+        compressed_data = lz4.frame.compress(
+            raw_data, compression_level=self.compression_level,
+        )
+        compress_elapsed = (time.time() - compress_start) * 1000
+        compressed_size = len(compressed_data)
+
+        # Ensure .lz4 extension (fix up if path has wrong suffix)
+        hash_hex = block_hash.hex()
+        lz4_path = file_path.parent / f"{hash_hex}.safetensors.lz4"
+
+        with open(lz4_path, 'wb') as f:
+            f.write(compressed_data)
+
+        temp_path.unlink(missing_ok=True)
+
+        logger.info(
+            f"🗜️ [lz4] Compressed block {hash_hex[:16]}: "
+            f"{raw_size} → {compressed_size} bytes "
+            f"({compressed_size / raw_size * 100:.1f}%), {compress_elapsed:.1f}ms"
+        )
+        return lz4_path
+
+    def _kvtc_compress_block(
+        self,
+        arrays_as_numpy: dict,
+        metadata: dict,
+        file_path: Path,
+        block_hash: bytes,
+    ) -> bool:
+        """KVTC-compress per-layer numpy arrays and write to .kvtc file.
+
+        Returns True on success, False if KVTC can't compress this data
+        (e.g. non-uniform dims, CacheList layers).
+        """
+        import numpy as np
+
+        num_layers = int(metadata.get("num_layers", 0))
+        if num_layers == 0:
+            return False
+
+        model_name = metadata.get("model_name", "unknown")
+
+        # Collect per-layer (keys, values) as numpy arrays
+        layer_pairs = []
+        original_shapes = []
+        feature_dims = set()
+
+        for i in range(num_layers):
+            k_key = f"layer_{i}_keys"
+            v_key = f"layer_{i}_values"
+            if k_key not in arrays_as_numpy or v_key not in arrays_as_numpy:
+                # CacheList or missing layer — can't KVTC compress
+                return False
+
+            k_np = arrays_as_numpy[k_key]
+            v_np = arrays_as_numpy[v_key]
+
+            # Record original shapes for reconstruction
+            original_shapes.append((tuple(k_np.shape), tuple(v_np.shape)))
+
+            # Flatten to 2D for KVTC (preserve last dim as feature dim)
+            k_2d = k_np.reshape(-1, k_np.shape[-1]).astype(np.float32, copy=False)
+            v_2d = v_np.reshape(-1, v_np.shape[-1]).astype(np.float32, copy=False)
+
+            feature_dims.add(k_2d.shape[-1])
+            feature_dims.add(v_2d.shape[-1])
+
+            layer_pairs.append((k_2d, v_2d))
+
+        # KVTC requires uniform feature dims for shared calibration
+        if len(feature_dims) > 2:  # keys and values can differ
+            logger.debug(
+                f"KVTC: non-uniform feature dims {feature_dims}, skipping"
+            )
+            return False
+
+        # Get or fit calibration (lazy, thread-safe)
+        calibration = self._get_kvtc_calibration(model_name, layer_pairs)
+        if calibration is None:
+            return False
+
+        # Encode all layers
+        from .kvtc_codec import encode_block_to_bytes
+
+        encoded_bytes = encode_block_to_bytes(layer_pairs, calibration)
+
+        # Build .kvtc file: JSON header + encoded blob
+        import struct
+
+        header = json.dumps({
+            **metadata,
+            "kvtc_version": "1",
+            "kvtc_fingerprint": calibration.fingerprint(),
+            "original_shapes": original_shapes,
+        }).encode("utf-8")
+
+        # Ensure parent directory exists (defensive)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(file_path, 'wb') as f:
+            # Format: [header_len:4bytes][header:json][encoded_blob]
+            f.write(struct.pack("<I", len(header)))
+            f.write(header)
+            f.write(encoded_bytes)
+
+        return True
+
+    def _get_kvtc_calibration(self, model_name: str, layer_pairs):
+        """Get or fit KVTC calibration for a model (thread-safe, lazy)."""
+        with self._kvtc_calibration_lock:
+            if self._kvtc_calibration is not None:
+                return self._kvtc_calibration
+
+            # Try loading from store
+            if self._kvtc_store is not None:
+                loaded = self._kvtc_store.load(model_name)
+                if loaded is not None:
+                    self._kvtc_calibration = loaded
+                    logger.info(
+                        f"🗜️ [KVTC] Loaded calibration for '{model_name}'"
+                    )
+                    return loaded
+
+            # Can't fit without data (load path passes None)
+            if layer_pairs is None:
+                return None
+
+            # Fit from the current block data
+            import numpy as np
+            from .kvtc_codec import fit_shared_calibration
+
+            key_matrices = [k for k, v in layer_pairs]
+            value_matrices = [v for k, v in layer_pairs]
+
+            try:
+                calibration = fit_shared_calibration(
+                    key_matrices, value_matrices, self._kvtc_config,
+                )
+            except Exception as e:
+                logger.warning(f"KVTC calibration fitting failed: {e}")
+                return None
+
+            self._kvtc_calibration = calibration
+
+            # Persist
+            if self._kvtc_store is not None:
+                try:
+                    self._kvtc_store.save(model_name, calibration)
+                    logger.info(
+                        f"🗜️ [KVTC] Fitted and saved calibration for '{model_name}'"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to save KVTC calibration: {e}")
+
+            return calibration
+
+    def _kvtc_load_block(
+        self,
+        file_path: Path,
+        block_metadata,
+    ) -> Optional[List[Any]]:
+        """Load a KVTC-compressed block from .kvtc file.
+
+        File format: [header_len:4bytes][header:json][encoded_blob]
+
+        Returns:
+            Reconstructed cache_data list (same format as standard load path),
+            or None on failure.
+        """
+        try:
+            with open(file_path, 'rb') as f:
+                # Read header length (4 bytes, little-endian unsigned int)
+                header_len_bytes = f.read(4)
+                if len(header_len_bytes) < 4:
+                    logger.error(f"KVTC file truncated (no header): {file_path}")
+                    return None
+
+                header_len = struct.unpack("<I", header_len_bytes)[0]
+
+                # Read JSON header
+                header_bytes = f.read(header_len)
+                if len(header_bytes) < header_len:
+                    logger.error(f"KVTC file truncated (header): {file_path}")
+                    return None
+
+                header = json.loads(header_bytes.decode("utf-8"))
+
+                # Read encoded blob (rest of file)
+                encoded_blob = f.read()
+
+            # Parse header fields
+            original_shapes = header.get("original_shapes", [])
+            num_layers = int(header.get("num_layers", 0))
+            model_name = header.get("model_name", "unknown")
+
+            if num_layers == 0:
+                logger.error(f"KVTC header has 0 layers: {file_path}")
+                return None
+
+            # Get calibration (must already exist for loading)
+            calibration = self._get_kvtc_calibration(model_name, None)
+            if calibration is None:
+                # Try loading from store directly (works even if kvtc_enabled=False,
+                # e.g. reading old .kvtc files from a previous session)
+                store = self._kvtc_store
+                if store is None:
+                    from .kvtc_calibration_store import KVTCCalibrationStore
+                    store = KVTCCalibrationStore(
+                        calibrations_dir=self._cache_dir / "kvtc_calibrations",
+                    )
+                calibration = store.load(model_name)
+                if calibration is not None:
+                    with self._kvtc_calibration_lock:
+                        self._kvtc_calibration = calibration
+
+            if calibration is None:
+                logger.error(
+                    f"KVTC calibration not found for model '{model_name}', "
+                    f"cannot decode block: {file_path}"
+                )
+                return None
+
+            # Decode: bytes → list of (keys_np, values_np) per layer
+            from .kvtc_codec import decode_block_from_bytes
+
+            # Convert original_shapes to proper format
+            shapes = [
+                (tuple(s[0]), tuple(s[1])) for s in original_shapes
+            ] if original_shapes else None
+
+            decode_start = time.time()
+            decoded_layers = decode_block_from_bytes(
+                encoded_blob, calibration, shapes,
+            )
+            decode_elapsed = (time.time() - decode_start) * 1000
+
+            # Convert numpy arrays back to mx.arrays
+            cache_data = []
+            for keys_np, values_np in decoded_layers:
+                keys_mx = mx.array(keys_np)
+                values_mx = mx.array(values_np)
+                cache_data.append((keys_mx, values_mx))
+
+            logger.debug(
+                f"🗜️ [KVTC] Decoded {num_layers} layers in {decode_elapsed:.1f}ms, "
+                f"file={file_path.stat().st_size} bytes"
+            )
+
+            return cache_data
+
+        except Exception as e:
+            logger.error(f"KVTC load failed for {file_path}: {e}")
+            return None
 
     def save_block(
         self,
@@ -2006,6 +2418,26 @@ class PagedSSDCacheManager(CacheManager):
             # mx.load() in a worker thread contested Metal GPU resources
             # with the main inference thread.
 
+            # Phase 3: KVTC-compressed files have their own load path
+            if file_path.suffix == '.kvtc':
+                cache_data = self._kvtc_load_block(file_path, metadata)
+                if cache_data is not None:
+                    self._index.touch(block_hash)
+                    self._stats["loads"] += 1
+                    self._stats["hits"] += 1
+                    if self._access_tracker:
+                        self._access_tracker.track_access(block_hash)
+                    logger.debug(
+                        f"🗜️ [KVTC] Loaded block: {block_hash.hex()[:16]}..."
+                    )
+                    return cache_data
+                else:
+                    logger.warning(
+                        f"KVTC load failed for {block_hash.hex()[:16]}, removing"
+                    )
+                    self._index.remove(block_hash)
+                    return None
+
             # P1: Decompress if file is compressed (supports .lz4 and legacy .zst)
             if file_path.suffix in ('.lz4', '.zst'):
                 import tempfile
@@ -2242,6 +2674,11 @@ class PagedSSDCacheManager(CacheManager):
             block_hash, file_path, metadata = item
             block_start = time.time()
             try:
+                # Phase 3: KVTC-compressed files have their own load path
+                if file_path.suffix == '.kvtc':
+                    cache_data = self._kvtc_load_block(file_path, metadata)
+                    return (block_hash, cache_data, None, None, metadata)
+
                 # P1: Read and decompress compressed file
                 if file_path.suffix in ('.lz4', '.zst'):
                     decompress_start = time.time()
@@ -2411,6 +2848,32 @@ class PagedSSDCacheManager(CacheManager):
             return None, None
 
         try:
+            # Phase 3: KVTC-compressed files have their own load path
+            if file_path.suffix == '.kvtc':
+                cache_data = self._kvtc_load_block(file_path, block_metadata)
+                if cache_data is not None:
+                    # Read header for metadata
+                    with open(file_path, 'rb') as f:
+                        hl = struct.unpack("<I", f.read(4))[0]
+                        kvtc_header = json.loads(f.read(hl).decode("utf-8"))
+
+                    layer_cache_types = block_metadata.layer_cache_types
+                    metadata_dict = {
+                        "num_layers": block_metadata.num_layers,
+                        "token_count": block_metadata.token_count,
+                        "model_name": block_metadata.model_name,
+                        "layer_cache_types": layer_cache_types,
+                        "layer_meta_states": block_metadata.layer_meta_states,
+                    }
+
+                    self._index.touch(block_hash)
+                    self._stats["loads"] += 1
+                    self._stats["hits"] += 1
+                    return cache_data, metadata_dict
+                else:
+                    self._index.remove(block_hash)
+                    return None, None
+
             # P1: Decompress if file is compressed (supports .lz4 and legacy .zst)
             if file_path.suffix in ('.lz4', '.zst'):
                 import tempfile

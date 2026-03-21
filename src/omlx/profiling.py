@@ -17,6 +17,7 @@
     stats = profiler.get_stats()
 """
 
+import json
 import logging
 import threading
 import time
@@ -61,6 +62,57 @@ class TimingStats:
         }
 
 
+@dataclass
+class CacheStats:
+    """缓存统计"""
+    hits: int = 0
+    misses: int = 0
+
+    @property
+    def hit_rate(self) -> float:
+        total = self.hits + self.misses
+        return self.hits / total if total > 0 else 0.0
+
+    def to_dict(self) -> Dict:
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "hit_rate": round(self.hit_rate, 4),
+        }
+
+
+@dataclass
+class MemorySnapshot:
+    """内存快照"""
+    label: str
+    mlx_mb: float
+    timestamp_ms: float
+
+    def to_dict(self) -> Dict:
+        return {
+            "label": self.label,
+            "mlx_mb": round(self.mlx_mb, 2),
+            "timestamp_ms": round(self.timestamp_ms, 3),
+        }
+
+
+@dataclass
+class RequestStats:
+    """请求统计"""
+    request_id: str
+    ttft_ms: float
+    tpot_ms: float
+    total_tokens: int
+
+    def to_dict(self) -> Dict:
+        return {
+            "request_id": self.request_id,
+            "ttft_ms": round(self.ttft_ms, 3),
+            "tpot_ms": round(self.tpot_ms, 3),
+            "total_tokens": self.total_tokens,
+        }
+
+
 class PerformanceProfiler:
     """性能分析器
 
@@ -96,6 +148,12 @@ class PerformanceProfiler:
 
         # 当前活动的timing（支持嵌套）
         self._current: Dict[int, List[tuple]] = defaultdict(list)  # thread_id -> [(name, start_time)]
+
+        # 扩展统计（ThunderOMLX 增强）
+        self._cache_stats: Dict[str, CacheStats] = defaultdict(CacheStats)
+        self._memory_snapshots: List[MemorySnapshot] = []
+        self._request_stats: List[RequestStats] = []
+        self._start_time = time.perf_counter()
 
     @contextmanager
     def section(self, name: str):
@@ -269,6 +327,11 @@ class PerformanceProfiler:
         with self._lock:
             self._stats.clear()
             self._current.clear()
+            # 重置扩展统计
+            self._cache_stats.clear()
+            self._memory_snapshots.clear()
+            self._request_stats.clear()
+            self._start_time = time.perf_counter()
 
     def merge_from(self, other: 'PerformanceProfiler'):
         """合并另一个profiler的统计
@@ -282,6 +345,145 @@ class PerformanceProfiler:
                 self._stats[name].total_ms += stats.total_ms
                 self._stats[name].min_ms = min(self._stats[name].min_ms, stats.min_ms)
                 self._stats[name].max_ms = max(self._stats[name].max_ms, stats.max_ms)
+
+    # ====== ThunderOMLX 扩展功能 ======
+
+    def _elapsed_ms(self) -> float:
+        """从启动到现在的毫秒数"""
+        return (time.perf_counter() - self._start_time) * 1000
+
+    def record_cache_hit(self, cache_type: str):
+        """记录缓存命中
+
+        Args:
+            cache_type: 缓存类型（如 "l2", "l3", "prefix"）
+        """
+        if not self.enabled:
+            return
+
+        with self._lock:
+            self._cache_stats[cache_type].hits += 1
+
+    def record_cache_miss(self, cache_type: str):
+        """记录缓存未命中
+
+        Args:
+            cache_type: 缓存类型（如 "l2", "l3", "prefix"）
+        """
+        if not self.enabled:
+            return
+
+        with self._lock:
+            self._cache_stats[cache_type].misses += 1
+
+    def snapshot_memory(self, label: str, mlx_mb: Optional[float] = None):
+        """记录内存快照
+
+        Args:
+            label: 快照标签
+            mlx_mb: MLX 张量内存（MB），如果为 None 则尝试自动获取
+        """
+        if not self.enabled:
+            return
+
+        if mlx_mb is None:
+            # 尝试获取 MLX 内存使用
+            try:
+                import mlx.core as mx
+                # MLX 没有直接的内存统计 API，使用占位值
+                mlx_mb = 0.0
+            except ImportError:
+                mlx_mb = 0.0
+
+        with self._lock:
+            snapshot = MemorySnapshot(
+                label=label,
+                mlx_mb=mlx_mb,
+                timestamp_ms=self._elapsed_ms(),
+            )
+            self._memory_snapshots.append(snapshot)
+
+    def record_request(self, request_id: str, ttft_ms: float, tpot_ms: float, total_tokens: int):
+        """记录请求统计
+
+        Args:
+            request_id: 请求 ID
+            ttft_ms: Time To First Token（毫秒）
+            tpot_ms: Time Per Output Token（毫秒）
+            total_tokens: 总 token 数
+        """
+        if not self.enabled:
+            return
+
+        with self._lock:
+            stats = RequestStats(
+                request_id=request_id,
+                ttft_ms=ttft_ms,
+                tpot_ms=tpot_ms,
+                total_tokens=total_tokens,
+            )
+            self._request_stats.append(stats)
+
+    def save_json(self, path: str):
+        """保存统计数据到 JSON 文件
+
+        Args:
+            path: 输出文件路径
+        """
+        if not self.enabled:
+            return
+
+        # 构建完整统计数据
+        stats = self.get_stats()
+
+        # 添加扩展统计
+        with self._lock:
+            # Cache 统计
+            cache_stats_dict = {
+                name: cstats.to_dict()
+                for name, cstats in self._cache_stats.items()
+            }
+
+            # 整体缓存命中率
+            total_hits = sum(cs.hits for cs in self._cache_stats.values())
+            total_misses = sum(cs.misses for cs in self._cache_stats.values())
+            total_cache = total_hits + total_misses
+            overall_hit_rate = total_hits / total_cache if total_cache > 0 else 0.0
+
+            # 请求统计摘要
+            request_summary = {}
+            if self._request_stats:
+                total_requests = len(self._request_stats)
+                avg_ttft = sum(r.ttft_ms for r in self._request_stats) / total_requests
+                avg_tpot = sum(r.tpot_ms for r in self._request_stats) / total_requests
+                total_tokens = sum(r.total_tokens for r in self._request_stats)
+
+                request_summary = {
+                    "total_requests": total_requests,
+                    "avg_ttft_ms": round(avg_ttft, 3),
+                    "avg_tpot_ms": round(avg_tpot, 3),
+                    "total_tokens": total_tokens,
+                }
+
+            # 构建输出
+            output = {
+                "summary": {
+                    "total_time_ms": stats.get("total_time_ms", 0.0),
+                    "total_requests": len(self._request_stats),
+                    "avg_ttft_ms": request_summary.get("avg_ttft_ms", 0.0),
+                    "avg_tpot_ms": request_summary.get("avg_tpot_ms", 0.0),
+                    "cache_hit_rate": round(overall_hit_rate, 4),
+                },
+                "timers": stats.get("operations", {}),
+                "cache_stats": cache_stats_dict,
+                "memory_snapshots": [snap.to_dict() for snap in self._memory_snapshots],
+                "request_stats": [req.to_dict() for req in self._request_stats],
+            }
+
+        with open(path, 'w') as f:
+            json.dump(output, f, indent=2)
+
+        logger.info(f"✅ Profiler report saved to: {path}")
 
 
 # 全局单例（可选使用）

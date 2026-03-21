@@ -1,0 +1,19 @@
+{
+  "name": "@omlx/thunder-context",
+  "version": "1.0.0",
+  "description": "ThunderOMLX ContextEngine plugin for OpenClaw - optimizes context assembly for cloud prompt cache alignment",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "keywords": ["openclaw", "context-engine", "thunderomlx", "prompt-cache"],
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "openclaw": ">=2026.3.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
