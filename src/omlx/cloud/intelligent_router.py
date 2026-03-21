@@ -596,18 +596,22 @@ class IntelligentRouter:
             return upgraded
 
         # Case 2: MF says LOCAL but rule says CLOUD_PREMIUM
-        # Downgrade to economy to save cost
+        # Downgrade to local to save cost.  Use a symmetric threshold:
+        # if win_rate < (threshold - margin), the weak model suffices.
+        # This adapts to different embedding backends (OpenAI range ~0.2-0.8,
+        # Gemini range ~0.72-0.78).
+        downgrade_threshold = self._mf_router.threshold - 0.03
         if (
             not should_cloud
             and decision.target == RouteTarget.CLOUD_PREMIUM
-            and win_rate < 0.3  # Strong signal that weak model suffices
+            and win_rate < downgrade_threshold
         ):
             downgraded = RoutingDecision(
                 target=RouteTarget.LOCAL,
                 model=self._primary_local,
                 reason=(
                     f"MF Router downgrade: win_rate={win_rate:.3f} "
-                    f"(<0.30) — local model sufficient"
+                    f"(<{downgrade_threshold:.2f}) — local model sufficient"
                 ),
                 confidence=1.0 - win_rate,
                 tier=1,

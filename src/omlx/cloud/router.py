@@ -161,19 +161,25 @@ class CloudRouter:
                     try:
                         ckpt = getattr(settings, "mf_router_checkpoint", None) or MFRouter.default_checkpoint_path()
                         oai_key = getattr(settings, "openai_api_key", "") or ""
+                        gemini_key = getattr(settings, "gemini_api_key", "") or ""
                         threshold = getattr(settings, "mf_router_threshold", 0.5)
-                        if ckpt and oai_key:
+                        if ckpt and (oai_key or gemini_key):
                             mf_router = MFRouter(
                                 checkpoint_path=ckpt,
                                 openai_api_key=oai_key,
+                                gemini_api_key=gemini_key,
                                 threshold=threshold,
                             )
-                            logger.info("[CloudRouter] MFRouter initialized (threshold=%.2f)", threshold)
+                            logger.info(
+                                "[CloudRouter] MFRouter initialized (backend=%s, threshold=%.2f)",
+                                mf_router.backend, threshold,
+                            )
                         else:
                             logger.warning(
-                                "[CloudRouter] MFRouter skipped: checkpoint=%s openai_key=%s",
+                                "[CloudRouter] MFRouter skipped: checkpoint=%s openai_key=%s gemini_key=%s",
                                 "set" if ckpt else "MISSING",
                                 "set" if oai_key else "MISSING",
+                                "set" if gemini_key else "MISSING",
                             )
                     except Exception as mf_exc:
                         logger.warning("[CloudRouter] MFRouter init failed: %s", mf_exc)
