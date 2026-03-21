@@ -80,25 +80,25 @@
 - scheduler.py 通过 ContextPilot 传递 message_boundaries 到 prefix cache matcher
 - 不再需要独立的 cache-aware chunking phase
 
-### 🔜 P3 HTTP Overhead 优化 (待启动)
+### 🔄 P3 HTTP Overhead 优化 (进行中)
 
-**状态**: 📋 **已识别，待启动**
+**状态**: 🔄 **Phase 1 完成 (序列化优化), Phase 2 待定**
 **来源**: P2 Phase 1 根因分析 + 早期优化清单
 **目标**: 降低 API 层 HTTP 开销 (当前 3.06ms/tok, 占 TPOT 25%)
 
-**已知开销分析**:
-- HTTP/SSE 序列化 + response wrapping
-- EngineCore → HTTP 层数据传递
-- 并发请求调度开销
-- ContextPilot 额外处理
+#### Phase 1: 序列化优化 — ✅ 完成 (2026-03-21)
+- ✅ 添加 orjson 依赖 (5-10x faster than stdlib json)
+- ✅ 热路径: 预构建 template dict + `_fast_chunk_sse()` — 消除每 token Pydantic 对象创建
+- ✅ 冷路径: `_chunk_to_sse()` — model_dump + orjson 替代 model_dump_json
+- ✅ stream_chat_completion: 全部 13 处 model_dump_json 替换
+- ✅ stream_completion: json.dumps → orjson.dumps + template
+- ✅ 微基准测试: **6-8x 加速** (2.6µs → 0.4µs/tok)
+- ✅ OpenAI SSE 格式兼容性验证通过
 
-**潜在优化方向**:
-- orjson 替代 json 序列化
-- 减少内存拷贝 (zero-copy response)
-- SSE 批量发送 (合并多个 token 事件)
-- Response wrapping 简化
-
-**预期收益**: 3ms → <1ms/tok, TG 从 ~79 tok/s → ~85+ tok/s
+**潜在 Phase 2 优化方向** (需生产环境 profiling 确认收益):
+- asyncio yield overhead 优化
+- TCP flush batching (合并多个 SSE 事件)
+- uvicorn/ASGI 层优化
 
 ---
 
@@ -506,6 +506,25 @@
 (无)
 
 ### Done (2026-03-21)
+
+#### ✅ P3 Phase 1: SSE 序列化优化 (HTTP Overhead)
+
+**任务**: 优化 streaming SSE 序列化路径，降低每 token HTTP 开销
+
+**根因**: `model_dump_json(exclude_none=True)` 每 token 创建 3 个 Pydantic 对象 + stdlib json 序列化
+
+**交付**:
+- ✅ 添加 orjson 依赖 (`pyproject.toml`)
+- ✅ `_fast_chunk_sse()` — 热路径：预构建 template dict + orjson.dumps (零 Pydantic 对象)
+- ✅ `_chunk_to_sse()` — 冷路径：model_dump + orjson (first/error/final/usage chunk)
+- ✅ `stream_chat_completion`: 13 处 model_dump_json → orjson
+- ✅ `stream_completion`: json.dumps → orjson template
+
+**基准**: 序列化 6-8x 加速 (2.6µs → 0.4µs/tok)，需生产 profiling 确认端到端改善
+
+#### ✅ 早期优化清单归档
+
+来源: x.com/qingq77 推文，6 项优化方向审计：3 项已完成、2 项废弃、1 项进行中 (HTTP overhead)
 
 #### ✅ 双语学术论文发布
 
