@@ -507,6 +507,32 @@
 
 ### Done (2026-03-21)
 
+#### ✅ Intelligent Routing Phase 2: Confidence Escalation + Shadow Analysis
+
+**任务**: 实现 model="auto" 的级联升级 + Shadow Mode 分析 API + 管理面板集成
+
+**交付**:
+- ✅ `confidence_checker.py` — 新建 (~150 行): 3-zone logprobs 置信度检查 (high >-0.5 / low <-2.0 / task-specific middle)
+- ✅ `intelligent_router.py` — 增加 4 个方法: `route_with_cascade()`, `check_confidence()`, `escalate()`, `analyze_confidence()` + ConfidenceChecker 初始化
+- ✅ `server.py` — 新增 `POST /v1/routing/mode` 端点 (shadow ↔ active 切换)
+- ✅ `routes.py` — 管理面板 GET/POST 增加 4 个智能路由字段
+- ✅ `_settings.html` — 智能路由控制区 (2 开关 + 2 数值输入)
+- ✅ `dashboard.js` — loadCloudSettings/saveCloudSettings 增加 4 字段
+- ✅ 5 语言 i18n 更新 (en/zh/ja/ko/zh-TW, 各 8 个新 key)
+
+**E2E 测试**: 11/11 通过
+- 路由统计/决策 API ✓
+- Shadow/Active 模式切换 ✓ (含非法模式 400 错误)
+- model="auto" 简单任务路由到本地 ✓
+- [[deepseek-r1]] 强制路由到云端 ✓
+- 管理面板 HTML 包含路由控制 ✓
+- ConfidenceChecker 高/低置信度判断 ✓
+- IntelligentRouter 级联方法存在性验证 ✓
+
+#### ✅ Intelligent Routing Phase 1: Rule-Based + model="auto" (前一会话完成)
+
+**交付**: IntelligentRouter (3-Tier cascade), TaskClassifier 编码子任务扩展, model="auto" 入口, Session Pin, 负载感知溢出
+
 #### ✅ P3 Phase 1: SSE 序列化优化 (HTTP Overhead)
 
 **任务**: 优化 streaming SSE 序列化路径，降低每 token HTTP 开销

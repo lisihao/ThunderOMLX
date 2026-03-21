@@ -1194,6 +1194,62 @@ async def cloud_health():
     return _server_state.cloud_router.get_health()
 
 
+@app.get("/v1/routing/stats")
+async def routing_stats(_: bool = Depends(verify_api_key)):
+    """Intelligent routing statistics."""
+    cr = _server_state.cloud_router
+    if not cr or not cr.intelligent_router:
+        return {"enabled": False}
+    return {
+        "enabled": True,
+        "shadow_mode": cr.intelligent_router._shadow_mode,
+        **cr.intelligent_router.get_routing_stats(),
+    }
+
+
+@app.get("/v1/routing/decisions")
+async def routing_decisions(
+    limit: int = 100, _: bool = Depends(verify_api_key)
+):
+    """Recent intelligent routing decisions."""
+    cr = _server_state.cloud_router
+    if not cr or not cr.intelligent_router:
+        return {"enabled": False, "decisions": []}
+    return {
+        "enabled": True,
+        "decisions": cr.intelligent_router.get_recent_decisions(limit=limit),
+    }
+
+
+@app.post("/v1/routing/mode")
+async def routing_mode(
+    body: dict,
+    _: bool = Depends(verify_api_key),
+):
+    """Switch intelligent routing between shadow and active modes."""
+    cloud_router = _server_state.cloud_router
+    if not cloud_router or not cloud_router.intelligent_router:
+        return JSONResponse(
+            {"error": "Intelligent routing is not enabled"},
+            status_code=400,
+        )
+    ir = cloud_router.intelligent_router
+    mode = body.get("mode", "").lower()
+    if mode == "shadow":
+        ir.set_shadow_mode(True)
+    elif mode == "active":
+        ir.set_shadow_mode(False)
+    else:
+        return JSONResponse(
+            {"error": f"Unknown mode: '{mode}'. Use 'shadow' or 'active'."},
+            status_code=400,
+        )
+    return {
+        "mode": "shadow" if ir.shadow_mode else "active",
+        "message": f"Routing mode set to {'shadow' if ir.shadow_mode else 'active'}",
+    }
+
+
 @app.post("/v1/context/optimize")
 async def context_optimize(
     request: ContextOptimizeRequest,
@@ -1710,6 +1766,11 @@ async def list_models(_: bool = Depends(verify_api_key)) -> ModelsResponse:
                             owned_by="cloud",
                         )
                     )
+                # Expose model="auto" when intelligent routing is available
+                if cloud_router.intelligent_router:
+                    models.append(
+                        ModelInfo(id="auto", owned_by="omlx-router")
+                    )
         except Exception:
             pass  # Don't fail local model listing if cloud health check fails
 
@@ -2043,8 +2104,20 @@ async def create_chat_completion(
             content_preview = str(msg.content)[:200] if msg.content else "(empty)"
             logger.log(5, "  Message[%d]: role=%s, content=%s...", i, msg.role, content_preview)
 
-    # Cloud routing intercept
+    # Intelligent routing: model="auto" resolves to a concrete model
     cloud_router = _server_state.cloud_router
+    if request.model == "auto" and cloud_router and cloud_router.intelligent_router:
+        from omlx.cloud.intelligent_router import RoutingDecision
+        decision = await cloud_router.intelligent_router.route(
+            request, conversation_id=None
+        )
+        logger.info(
+            "IntelligentRouter: auto -> %s (%s, tier=%d)",
+            decision.model, decision.reason, decision.tier,
+        )
+        request.model = decision.model
+
+    # Cloud routing intercept
     if cloud_router and await cloud_router.is_cloud_model(request.model):
         if request.stream:
             return StreamingResponse(

@@ -882,6 +882,68 @@
                                     </button>
                                 </div>
 
+                                <!-- Intelligent Routing Sub-header -->
+                                <div class="px-6 py-3 bg-neutral-50 border-t border-neutral-200">
+                                    <div class="flex items-center gap-2">
+                                        <i data-lucide="route" class="w-3.5 h-3.5 text-neutral-400"></i>
+                                        <span class="text-[10px] font-bold uppercase tracking-wider text-neutral-400">{{ t('settings.cloud.intelligent_routing') }}</span>
+                                    </div>
+                                </div>
+
+                                <!-- Intelligent Routing Enabled -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">{{ t('settings.cloud.intelligent_routing_enabled') }}</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cloud.intelligent_routing_enabled_hint') }}</p>
+                                    </div>
+                                    <button type="button"
+                                            @click="globalSettings.cloud.intelligent_routing_enabled = !globalSettings.cloud.intelligent_routing_enabled; saveCloudSettings()"
+                                            :class="globalSettings.cloud.intelligent_routing_enabled ? 'bg-black' : 'bg-neutral-200'"
+                                            class="relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black">
+                                        <span :class="globalSettings.cloud.intelligent_routing_enabled ? 'translate-x-5' : 'translate-x-0'"
+                                              class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
+                                    </button>
+                                </div>
+
+                                <!-- Shadow Mode -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">{{ t('settings.cloud.intelligent_routing_shadow') }}</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cloud.intelligent_routing_shadow_hint') }}</p>
+                                    </div>
+                                    <button type="button"
+                                            @click="globalSettings.cloud.intelligent_routing_shadow = !globalSettings.cloud.intelligent_routing_shadow; saveCloudSettings()"
+                                            :class="globalSettings.cloud.intelligent_routing_shadow ? 'bg-black' : 'bg-neutral-200'"
+                                            class="relative w-11 h-6 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-black">
+                                        <span :class="globalSettings.cloud.intelligent_routing_shadow ? 'translate-x-5' : 'translate-x-0'"
+                                              class="block w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform duration-300 absolute top-0.5 left-0.5"></span>
+                                    </button>
+                                </div>
+
+                                <!-- Local Overflow Threshold -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">{{ t('settings.cloud.local_overflow_threshold') }}</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cloud.local_overflow_threshold_hint') }}</p>
+                                    </div>
+                                    <input type="number" x-model.number="globalSettings.cloud.local_overflow_threshold"
+                                           @change="saveCloudSettings()"
+                                           min="1" max="32"
+                                           class="w-48 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all">
+                                </div>
+
+                                <!-- Session Pin Threshold -->
+                                <div class="flex items-center justify-between px-6 py-4">
+                                    <div>
+                                        <label class="text-sm text-neutral-700">{{ t('settings.cloud.session_pin_threshold') }}</label>
+                                        <p class="text-xs text-neutral-400 mt-0.5">{{ t('settings.cloud.session_pin_threshold_hint') }}</p>
+                                    </div>
+                                    <input type="number" x-model.number="globalSettings.cloud.session_pin_threshold"
+                                           @change="saveCloudSettings()"
+                                           min="1" max="10"
+                                           class="w-48 px-3 py-2 text-sm text-right border border-neutral-200 rounded-lg focus:ring-2 focus:ring-neutral-900 focus:border-transparent transition-all">
+                                </div>
+
                             </div>
                         </div>
 

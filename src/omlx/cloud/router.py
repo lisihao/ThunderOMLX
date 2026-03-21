@@ -15,9 +15,12 @@ from uuid import uuid4
 
 from omlx.cloud.backends.base import GenerationRequest, GenerationResponse
 from omlx.cloud.budget import BudgetChecker
+from omlx.cloud.classifier import TaskClassifier
 from omlx.cloud.context_pilot import ContextPilotOptimizer
 from omlx.cloud.conversation_store import ConversationDB, ConversationStore, TopicSegment
 from omlx.cloud.dispatcher import CloudDispatcher
+from omlx.cloud.intelligent_router import IntelligentRouter
+from omlx.cloud.selector import ModelSelector
 from omlx.cloud.semantic_cache import SemanticCache, SemanticCacheDB
 
 logger = logging.getLogger("omlx.cloud.router")
@@ -130,6 +133,23 @@ class CloudRouter:
                 )
 
         self._backends = backends
+
+        # Phase: Intelligent Router (model="auto")
+        self._intelligent_router: Optional[IntelligentRouter] = None
+        if getattr(settings, "intelligent_routing_enabled", False):
+            try:
+                self._intelligent_router = IntelligentRouter(
+                    classifier=TaskClassifier(),
+                    selector=ModelSelector(),
+                    settings=settings,
+                    budget_checker=self._budget,
+                )
+                logger.info("[CloudRouter] IntelligentRouter initialized")
+            except Exception as exc:
+                logger.warning(
+                    "[CloudRouter] IntelligentRouter init failed: %s", exc
+                )
+
         logger.info(
             "[CloudRouter] Initialized with %d backends: %s",
             len(backends),
@@ -206,6 +226,11 @@ class CloudRouter:
         default_path = Path.home() / ".omlx" / "cloud_budget.db"
         default_path.parent.mkdir(parents=True, exist_ok=True)
         return str(default_path)
+
+    @property
+    def intelligent_router(self) -> Optional[IntelligentRouter]:
+        """Return the IntelligentRouter instance, or None if disabled."""
+        return self._intelligent_router
 
     async def is_cloud_model(self, model: Optional[str]) -> bool:
         """Check if a model should be routed to the cloud.

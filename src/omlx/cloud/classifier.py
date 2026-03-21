@@ -1,10 +1,24 @@
 """Task Classifier for OMLX cloud routing."""
 
+from enum import Enum
 from typing import List, Dict, Optional
 import re
 import logging
 
 logger = logging.getLogger("omlx.cloud.classifier")
+
+
+class CodingSubtask(str, Enum):
+    """Fine-grained coding subtask categories."""
+
+    COMPLETION = "completion"
+    SIMPLE_FIX = "simple_fix"
+    DOCUMENTATION = "documentation"
+    DEBUGGING = "debugging"
+    ARCHITECTURE = "architecture"
+    SECURITY = "security"
+    REFACTOR = "refactor"
+    EXPLANATION = "explanation"
 
 
 class TaskClassifier:
@@ -24,6 +38,42 @@ class TaskClassifier:
         self.complexity_indicators = {
             "high": ["复杂", "深入", "详细", "系统", "架构", "complex", "detailed", "architecture"],
             "low": ["简单", "快速", "概述", "simple", "quick", "brief"],
+        }
+
+        # Coding subtask keywords (Chinese + English)
+        self.coding_subtask_keywords = {
+            CodingSubtask.COMPLETION: [
+                "写", "实现", "创建", "添加", "新增",
+                "write", "implement", "create", "add", "new function", "new class",
+            ],
+            CodingSubtask.SIMPLE_FIX: [
+                "修复", "修改", "改一下", "小问题",
+                "fix", "patch", "typo", "bug fix",
+            ],
+            CodingSubtask.DOCUMENTATION: [
+                "文档", "注释", "readme", "docstring",
+                "document", "comment", "jsdoc",
+            ],
+            CodingSubtask.DEBUGGING: [
+                "调试", "排查", "为什么报错", "内存泄漏",
+                "debug", "trace", "why error", "stack trace", "memory leak",
+            ],
+            CodingSubtask.ARCHITECTURE: [
+                "架构", "设计", "系统设计", "分布式", "微服务",
+                "architecture", "system design", "distributed", "microservice", "scalab",
+            ],
+            CodingSubtask.SECURITY: [
+                "安全", "漏洞", "注入", "xss", "csrf", "渗透",
+                "security", "vulnerability", "injection", "pentest",
+            ],
+            CodingSubtask.REFACTOR: [
+                "重构", "优化", "清理",
+                "refactor", "restructure", "cleanup", "optimize code", "dead code",
+            ],
+            CodingSubtask.EXPLANATION: [
+                "解释", "什么意思", "怎么理解",
+                "explain", "what does", "how does", "walkthrough",
+            ],
         }
 
         # Sensitivity keywords (Chinese + English)
@@ -116,12 +166,136 @@ class TaskClassifier:
             "features": features,
         }
 
+        # Include coding subtask classification when task is coding
+        if task_type == "coding":
+            result["coding_subtask"] = self.classify_coding_subtask(messages)
+
         # Include forced route if a tag was detected
         if force_route:
             result["force_route"] = force_route["target"]
             logger.info(f"[classify] forced route tag: [[{force_route['target']}]]")
 
         return result
+
+    def classify_coding_subtask(self, messages: List[Dict]) -> Dict:
+        """Classify coding subtask with confidence.
+
+        Analyzes conversation messages to determine a fine-grained coding subtask
+        category. Uses keyword matching, message length, code block presence, and
+        conversation length as signals.
+
+        Args:
+            messages: List of message dicts with "role" and "content" keys.
+
+        Returns:
+            {
+                "subtask": CodingSubtask value,
+                "confidence": float (0-1),
+                "signals": list of matched signals
+            }
+        """
+        # Gather all user message text
+        user_messages = [msg for msg in messages if msg.get("role") == "user"]
+        if not user_messages:
+            return {
+                "subtask": CodingSubtask.COMPLETION.value,
+                "confidence": 0.1,
+                "signals": [],
+            }
+
+        last_message = user_messages[-1].get("content", "")
+        all_user_text = " ".join(msg.get("content", "") for msg in user_messages)
+        text_lower = last_message.lower()
+        all_text_lower = all_user_text.lower()
+
+        # 1. Score each subtask by keyword matches
+        scores: Dict[CodingSubtask, int] = {}
+        matched_signals: Dict[CodingSubtask, List[str]] = {}
+
+        for subtask, keywords in self.coding_subtask_keywords.items():
+            matched = [kw for kw in keywords if kw in text_lower]
+            # Also check full conversation for weaker signals
+            context_matched = [kw for kw in keywords if kw in all_text_lower and kw not in matched]
+            total = len(matched) + len(context_matched) * 0.5
+            scores[subtask] = total
+            signals = []
+            if matched:
+                signals.extend([f"keyword:{kw}" for kw in matched])
+            if context_matched:
+                signals.extend([f"context:{kw}" for kw in context_matched])
+            matched_signals[subtask] = signals
+
+        # 2. Contextual boosting
+        has_code = bool(re.search(r"```", last_message))
+        message_length = len(last_message)
+        conversation_length = len(messages)
+
+        # Long messages lean toward debugging / architecture
+        if message_length > 2000:
+            scores[CodingSubtask.DEBUGGING] = scores.get(CodingSubtask.DEBUGGING, 0) + 1
+            scores[CodingSubtask.ARCHITECTURE] = scores.get(CodingSubtask.ARCHITECTURE, 0) + 1
+            matched_signals.setdefault(CodingSubtask.DEBUGGING, []).append("long_message")
+            matched_signals.setdefault(CodingSubtask.ARCHITECTURE, []).append("long_message")
+
+        # Code blocks lean toward debugging / fix / completion
+        if has_code:
+            scores[CodingSubtask.DEBUGGING] = scores.get(CodingSubtask.DEBUGGING, 0) + 1
+            scores[CodingSubtask.SIMPLE_FIX] = scores.get(CodingSubtask.SIMPLE_FIX, 0) + 0.5
+            scores[CodingSubtask.COMPLETION] = scores.get(CodingSubtask.COMPLETION, 0) + 0.5
+            matched_signals.setdefault(CodingSubtask.DEBUGGING, []).append("has_code_block")
+            matched_signals.setdefault(CodingSubtask.SIMPLE_FIX, []).append("has_code_block")
+            matched_signals.setdefault(CodingSubtask.COMPLETION, []).append("has_code_block")
+
+        # Long conversations lean toward debugging / architecture
+        if conversation_length > 5:
+            scores[CodingSubtask.DEBUGGING] = scores.get(CodingSubtask.DEBUGGING, 0) + 1
+            scores[CodingSubtask.ARCHITECTURE] = scores.get(CodingSubtask.ARCHITECTURE, 0) + 0.5
+            matched_signals.setdefault(CodingSubtask.DEBUGGING, []).append("long_conversation")
+            matched_signals.setdefault(CodingSubtask.ARCHITECTURE, []).append("long_conversation")
+
+        # 3. Pick the winning subtask
+        max_score = max(scores.values()) if scores else 0
+
+        if max_score == 0:
+            # No signals at all: default to COMPLETION with low confidence
+            logger.info("[coding_subtask] no signals matched, default=completion")
+            return {
+                "subtask": CodingSubtask.COMPLETION.value,
+                "confidence": 0.2,
+                "signals": [],
+            }
+
+        winning_subtask = max(scores, key=scores.get)
+        winning_signals = matched_signals.get(winning_subtask, [])
+
+        # 4. Compute confidence based on score magnitude and signal diversity
+        # Base confidence from keyword match count (capped at 1.0)
+        keyword_signals = [s for s in winning_signals if s.startswith("keyword:")]
+        context_signals = [s for s in winning_signals if s.startswith("context:")]
+        boost_signals = [s for s in winning_signals if not s.startswith("keyword:") and not s.startswith("context:")]
+
+        confidence = min(1.0, 0.3 + len(keyword_signals) * 0.2 + len(context_signals) * 0.1 + len(boost_signals) * 0.1)
+
+        # Penalize if the runner-up is close
+        sorted_scores = sorted(scores.values(), reverse=True)
+        if len(sorted_scores) > 1 and sorted_scores[0] > 0:
+            gap_ratio = (sorted_scores[0] - sorted_scores[1]) / sorted_scores[0]
+            if gap_ratio < 0.3:
+                confidence *= 0.8  # Reduce confidence when scores are close
+
+        confidence = round(confidence, 2)
+
+        logger.info(
+            f"[coding_subtask] subtask={winning_subtask.value} | confidence={confidence} | "
+            f"scores={{{', '.join(f'{k.value}:{v}' for k, v in scores.items() if v > 0)}}} | "
+            f"signals={winning_signals}"
+        )
+
+        return {
+            "subtask": winning_subtask.value,
+            "confidence": confidence,
+            "signals": winning_signals,
+        }
 
     def _detect_task_type(self, text: str) -> str:
         """Detect task type from text content."""

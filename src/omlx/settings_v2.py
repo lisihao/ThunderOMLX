@@ -609,6 +609,12 @@ class CloudSettingsV2(BaseModel):
     conversation_store_enabled: bool = True
     conversation_db_path: Optional[str] = None
 
+    # Intelligent routing (model="auto")
+    intelligent_routing_enabled: bool = False
+    intelligent_routing_shadow: bool = True  # Shadow mode: log decisions but don't override
+    local_overflow_threshold: int = 4        # Local queue depth before overflow to cloud
+    session_pin_threshold: int = 3           # Consecutive same-model turns before pinning
+
 
 class GlobalSettingsV2(BaseSettings):
     """

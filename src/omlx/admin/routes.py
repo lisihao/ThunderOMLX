@@ -179,6 +179,10 @@ class GlobalSettingsRequest(BaseModel):
     cloud_conversation_store_enabled: Optional[bool] = None
     cloud_max_queue_depth: Optional[int] = Field(None, ge=1)
     cloud_agent_fair_share: Optional[float] = Field(None, ge=0, le=1)
+    cloud_intelligent_routing_enabled: Optional[bool] = None
+    cloud_intelligent_routing_shadow: Optional[bool] = None
+    cloud_local_overflow_threshold: Optional[int] = Field(None, ge=1, le=32)
+    cloud_session_pin_threshold: Optional[int] = Field(None, ge=1, le=10)
 
 
 class HFDownloadRequest(BaseModel):
@@ -1674,6 +1678,10 @@ async def get_global_settings(is_admin: bool = Depends(require_admin)):
             "agent_fair_share": global_settings.cloud.agent_fair_share,
             "concurrency": global_settings.cloud.concurrency,
             "conversation_db_path": global_settings.cloud.conversation_db_path,
+            "intelligent_routing_enabled": global_settings.cloud.intelligent_routing_enabled,
+            "intelligent_routing_shadow": global_settings.cloud.intelligent_routing_shadow,
+            "local_overflow_threshold": global_settings.cloud.local_overflow_threshold,
+            "session_pin_threshold": global_settings.cloud.session_pin_threshold,
         },
         "system": {
             "total_memory_bytes": memory_info["total_bytes"],
@@ -2019,6 +2027,18 @@ async def update_global_settings(
         cloud_changed = True
     if request.cloud_agent_fair_share is not None:
         global_settings.cloud.agent_fair_share = request.cloud_agent_fair_share
+        cloud_changed = True
+    if request.cloud_intelligent_routing_enabled is not None:
+        global_settings.cloud.intelligent_routing_enabled = request.cloud_intelligent_routing_enabled
+        cloud_changed = True
+    if request.cloud_intelligent_routing_shadow is not None:
+        global_settings.cloud.intelligent_routing_shadow = request.cloud_intelligent_routing_shadow
+        cloud_changed = True
+    if request.cloud_local_overflow_threshold is not None:
+        global_settings.cloud.local_overflow_threshold = request.cloud_local_overflow_threshold
+        cloud_changed = True
+    if request.cloud_session_pin_threshold is not None:
+        global_settings.cloud.session_pin_threshold = request.cloud_session_pin_threshold
         cloud_changed = True
 
     if cloud_changed:

@@ -40,6 +40,8 @@
                     context_pilot_enabled: true, semantic_cache_enabled: true,
                     semantic_cache_threshold: 0.85, semantic_cache_ttl: 14400,
                     conversation_store_enabled: true,
+                    intelligent_routing_enabled: false, intelligent_routing_shadow: true,
+                    local_overflow_threshold: 4, session_pin_threshold: 3,
                 },
                 ui: { language: 'en' },
                 system: { total_memory_bytes: 0, total_memory: '', auto_model_memory: '', ssd_total_bytes: 0, ssd_total: '' },
@@ -995,6 +997,10 @@
                             cloud_semantic_cache_threshold: this.globalSettings.cloud.semantic_cache_threshold,
                             cloud_semantic_cache_ttl: this.globalSettings.cloud.semantic_cache_ttl,
                             cloud_conversation_store_enabled: this.globalSettings.cloud.conversation_store_enabled,
+                            cloud_intelligent_routing_enabled: this.globalSettings.cloud.intelligent_routing_enabled,
+                            cloud_intelligent_routing_shadow: this.globalSettings.cloud.intelligent_routing_shadow,
+                            cloud_local_overflow_threshold: this.globalSettings.cloud.local_overflow_threshold,
+                            cloud_session_pin_threshold: this.globalSettings.cloud.session_pin_threshold,
                         }),
                     });
                     if (!response.ok) {
