@@ -28,9 +28,16 @@ class TaskClassifier:
         # Task type keywords
         self.task_keywords = {
             "reasoning": ["分析", "推理", "证明", "解释", "为什么", "analyze", "reason", "explain", "why"],
-            "coding": ["代码", "实现", "写", "修复", "bug", "code", "implement", "write", "fix"],
+            "coding": [
+                "代码", "实现", "修复", "bug", "code", "implement", "write code", "fix",
+                "写代码", "写程序", "写脚本", "写函数",
+                "架构", "分布式", "微服务", "数据库", "API", "服务器", "缓存",
+                "重构", "优化", "部署", "测试", "接口", "模块", "函数", "类",
+                "architecture", "database", "server", "cache", "refactor",
+                "optimize", "deploy", "microservice", "distributed",
+            ],
             "translation": ["翻译", "translate", "中文", "英文", "chinese", "english"],
-            "creative": ["创意", "设计", "故事", "creative", "design", "story"],
+            "creative": ["创意", "故事", "小说", "诗", "creative", "story", "novel", "poem"],
             "qa": ["问答", "什么", "如何", "what", "how", "question"],
         }
 
