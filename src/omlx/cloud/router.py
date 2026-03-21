@@ -140,6 +140,7 @@ class CloudRouter:
         # Phase: Intelligent Router (model="auto")
         self._intelligent_router: Optional[IntelligentRouter] = None
         self._routing_store: Optional[RoutingStore] = None
+        self._auto_trainer = None  # type: Optional[AutoTrainer]
         if getattr(settings, "intelligent_routing_enabled", False):
             try:
                 self._routing_store = RoutingStore()
@@ -201,6 +202,33 @@ class CloudRouter:
                 logger.warning(
                     "[CloudRouter] IntelligentRouter init failed: %s", exc
                 )
+
+        # AutoTrainer: background incremental training scheduler
+        if (
+            getattr(settings, "auto_train_enabled", False)
+            and self._intelligent_router
+            and self._intelligent_router._mf_router
+            and self._routing_store
+        ):
+            try:
+                from .auto_trainer import AutoTrainer
+                from .preference_labeler import PreferenceLabeler
+
+                self._auto_trainer = AutoTrainer(
+                    interval_hours=getattr(settings, "auto_train_interval_hours", 6.0),
+                    min_pairs=getattr(settings, "incremental_training_min_pairs", 100),
+                    mix_ratio=getattr(settings, "incremental_training_mix_ratio", 0.3),
+                    mf_router=self._intelligent_router._mf_router,
+                    routing_store=self._routing_store,
+                    preference_labeler=PreferenceLabeler(
+                        db_path=self._routing_store._db_path,
+                        mf_threshold=getattr(settings, "mf_router_threshold", 0.77),
+                    ),
+                )
+                logger.info("[CloudRouter] AutoTrainer configured (interval=%.1fh)",
+                            getattr(settings, "auto_train_interval_hours", 6.0))
+            except Exception as exc:
+                logger.warning("[CloudRouter] AutoTrainer init failed: %s", exc)
 
         logger.info(
             "[CloudRouter] Initialized with %d backends: %s",
@@ -294,10 +322,19 @@ class CloudRouter:
                     "[CloudRouter] RoutingStore init failed: %s", exc
                 )
 
+        if self._auto_trainer:
+            self._auto_trainer.start()
+            logger.info("[CloudRouter] AutoTrainer started")
+
     @property
     def intelligent_router(self) -> Optional[IntelligentRouter]:
         """Return the IntelligentRouter instance, or None if disabled."""
         return self._intelligent_router
+
+    @property
+    def auto_trainer(self):
+        """Return the AutoTrainer instance, or None if disabled."""
+        return self._auto_trainer
 
     async def is_cloud_model(self, model: Optional[str]) -> bool:
         """Check if a model should be routed to the cloud.

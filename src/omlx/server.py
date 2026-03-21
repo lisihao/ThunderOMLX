@@ -362,6 +362,10 @@ async def lifespan(app: FastAPI):
 
     # Shutdown: Save all-time stats, stop TTL task, process memory enforcer, etc.
     get_server_metrics().save_alltime()
+    # Stop AutoTrainer if running
+    if _server_state.cloud_router is not None and _server_state.cloud_router.auto_trainer:
+        await _server_state.cloud_router.auto_trainer.stop()
+        logger.info("AutoTrainer stopped")
     if ttl_task is not None:
         ttl_task.cancel()
         try:
@@ -1294,6 +1298,117 @@ async def routing_cost_savings(
     return await ir._routing_store.get_cost_savings(hours)
 
 
+@app.post("/v1/routing/label")
+async def routing_label(_: bool = Depends(verify_api_key)):
+    """Trigger batch preference labeling on routing decisions."""
+    cloud_router = _server_state.cloud_router
+    if not cloud_router or not cloud_router.intelligent_router:
+        return JSONResponse(
+            {"error": "Intelligent routing is not enabled"},
+            status_code=400,
+        )
+    ir = cloud_router.intelligent_router
+    if not ir._routing_store or not ir._routing_store._db:
+        return JSONResponse(
+            {"error": "Routing store not initialized"},
+            status_code=400,
+        )
+    from omlx.cloud.preference_labeler import PreferenceLabeler
+
+    mf_threshold = getattr(ir._mf_router, "threshold", 0.77) if ir._mf_router else 0.77
+    labeler = PreferenceLabeler(
+        db_path=ir._routing_store._db_path,
+        mf_threshold=mf_threshold,
+    )
+    result = await labeler.batch_label()
+    return result
+
+
+@app.get("/v1/routing/training-data-stats")
+async def routing_training_stats(_: bool = Depends(verify_api_key)):
+    """Return available training data statistics."""
+    cloud_router = _server_state.cloud_router
+    if not cloud_router or not cloud_router.intelligent_router:
+        return JSONResponse(
+            {"error": "Intelligent routing is not enabled"},
+            status_code=400,
+        )
+    ir = cloud_router.intelligent_router
+    if not ir._routing_store:
+        return JSONResponse(
+            {"error": "Routing store not initialized"},
+            status_code=400,
+        )
+    store_stats = await ir._routing_store.get_training_stats()
+
+    from omlx.cloud.preference_labeler import PreferenceLabeler
+
+    mf_threshold = getattr(ir._mf_router, "threshold", 0.77) if ir._mf_router else 0.77
+    labeler = PreferenceLabeler(
+        db_path=ir._routing_store._db_path,
+        mf_threshold=mf_threshold,
+    )
+    label_stats = await labeler.get_label_stats()
+    result = {**store_stats, "label_distribution": label_stats}
+    if cloud_router.auto_trainer:
+        result["auto_trainer"] = cloud_router.auto_trainer.status
+    return result
+
+
+@app.post("/v1/routing/deploy-checkpoint")
+async def routing_deploy_checkpoint(
+    body: dict,
+    _: bool = Depends(verify_api_key),
+):
+    """Hot-reload a new MF Router checkpoint without server restart."""
+    cloud_router = _server_state.cloud_router
+    if not cloud_router or not cloud_router.intelligent_router:
+        return JSONResponse(
+            {"error": "Intelligent routing is not enabled"},
+            status_code=400,
+        )
+    ir = cloud_router.intelligent_router
+    if not ir._mf_router:
+        return JSONResponse(
+            {"error": "MF Router is not enabled"},
+            status_code=400,
+        )
+    checkpoint_path = body.get("checkpoint_path")
+    if not checkpoint_path:
+        return JSONResponse(
+            {"error": "checkpoint_path is required"},
+            status_code=400,
+        )
+    if not os.path.isfile(checkpoint_path):
+        return JSONResponse(
+            {"error": f"Checkpoint file not found: {checkpoint_path}"},
+            status_code=404,
+        )
+    success = await ir._mf_router.hot_reload_checkpoint(checkpoint_path)
+    if success:
+        return {
+            "message": f"Checkpoint loaded: {checkpoint_path}",
+            "status": "success",
+        }
+    return JSONResponse(
+        {"error": "Failed to load checkpoint (check server logs)"},
+        status_code=500,
+    )
+
+
+@app.post("/v1/routing/auto-train")
+async def routing_auto_train(_: bool = Depends(verify_api_key)):
+    """Manually trigger one auto-training cycle."""
+    cloud_router = _server_state.cloud_router
+    if not cloud_router or not cloud_router.auto_trainer:
+        return JSONResponse(
+            {"error": "AutoTrainer is not enabled. Set auto_train_enabled=true in cloud settings."},
+            status_code=400,
+        )
+    result = await cloud_router.auto_trainer.trigger_now()
+    return result
+
+
 @app.post("/v1/context/optimize")
 async def context_optimize(
     request: ContextOptimizeRequest,
@@ -2150,6 +2265,8 @@ async def create_chat_completion(
 
     # Intelligent routing: model="auto" resolves to a concrete model
     cloud_router = _server_state.cloud_router
+    _routing_decision_id = ""
+    _intelligent_router = None
     if request.model == "auto" and cloud_router and cloud_router.intelligent_router:
         from omlx.cloud.intelligent_router import RoutingDecision
         decision = await cloud_router.intelligent_router.route(
@@ -2160,16 +2277,28 @@ async def create_chat_completion(
             decision.model, decision.reason, decision.tier,
         )
         request.model = decision.model
+        _routing_decision_id = getattr(decision, "decision_id", "") or ""
+        _intelligent_router = cloud_router.intelligent_router
 
     # Cloud routing intercept
     if cloud_router and await cloud_router.is_cloud_model(request.model):
         if request.stream:
+            stream_gen = cloud_router.generate_stream(request, request.model)
+            if _routing_decision_id and _intelligent_router:
+                stream_gen = _wrap_stream_with_outcome(
+                    stream_gen, _routing_decision_id, _intelligent_router
+                )
             return StreamingResponse(
-                cloud_router.generate_stream(request, request.model),
-                media_type="text/event-stream",
+                stream_gen, media_type="text/event-stream",
             )
         else:
+            _cloud_start = time.perf_counter()
             result = await cloud_router.generate(request, request.model)
+            _cloud_latency_ms = (time.perf_counter() - _cloud_start) * 1000
+            if _routing_decision_id and _intelligent_router:
+                _fire_and_forget_outcome(
+                    _intelligent_router, _routing_decision_id, result, _cloud_latency_ms
+                )
             return JSONResponse(content=result)
 
     load_start = time.perf_counter()
@@ -2298,6 +2427,21 @@ async def create_chat_completion(
     tokens_per_sec = output.completion_tokens / elapsed if elapsed > 0 else 0
     logger.info(f"Chat completion: {output.completion_tokens} tokens in {elapsed:.2f}s ({tokens_per_sec:.1f} tok/s)")
 
+    # Record routing outcome for model="auto" decisions (fire-and-forget)
+    if _routing_decision_id and _intelligent_router:
+        try:
+            asyncio.get_running_loop().create_task(
+                _intelligent_router.record_outcome(
+                    _routing_decision_id,
+                    status="success",
+                    latency_ms=elapsed * 1000,
+                    input_tokens=output.prompt_tokens,
+                    output_tokens=output.completion_tokens,
+                )
+            )
+        except RuntimeError:
+            pass
+
     # Record metrics
     get_server_metrics().record_request_complete(
         prompt_tokens=output.prompt_tokens,
@@ -2385,6 +2529,59 @@ async def create_chat_completion(
             generation_tokens_per_second=round(output.completion_tokens / gen_dur, 2) if gen_dur > 0 else None,
         ),
     )
+
+
+async def _wrap_stream_with_outcome(
+    stream: AsyncIterator[str],
+    decision_id: str,
+    intelligent_router: Any,
+) -> AsyncIterator[str]:
+    """Wrap a streaming generator to record routing outcome after completion."""
+    start_time = time.perf_counter()
+    status = "success"
+    error_msg = ""
+    try:
+        async for chunk in stream:
+            yield chunk
+    except Exception as exc:
+        status = "error"
+        error_msg = str(exc)
+        raise
+    finally:
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        try:
+            await intelligent_router.record_outcome(
+                decision_id,
+                status=status,
+                latency_ms=latency_ms,
+                error=error_msg,
+            )
+        except Exception:
+            pass
+
+
+def _fire_and_forget_outcome(
+    intelligent_router: Any,
+    decision_id: str,
+    result: Dict,
+    latency_ms: float,
+) -> None:
+    """Fire-and-forget cloud outcome recording for non-streaming responses."""
+    usage = result.get("usage", {})
+    has_error = "error" in result
+    try:
+        asyncio.get_running_loop().create_task(
+            intelligent_router.record_outcome(
+                decision_id,
+                status="error" if has_error else "success",
+                latency_ms=latency_ms,
+                input_tokens=usage.get("prompt_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                error=result.get("error", {}).get("message", "") if has_error else "",
+            )
+        )
+    except RuntimeError:
+        pass
 
 
 def _inject_json_instruction(messages: list, instruction: str) -> list:

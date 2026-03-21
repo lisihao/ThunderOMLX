@@ -17,6 +17,7 @@ Usage::
 import logging
 import os
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 import aiosqlite
@@ -64,22 +65,79 @@ class RoutingStore:
             ON routing_decisions(target)
         """)
         await self._db.commit()
+
+        # --- Incremental training feedback columns (idempotent migration) ---
+        cursor = await self._db.execute(
+            "PRAGMA table_info(routing_decisions)"
+        )
+        existing_cols = {row[1] for row in await cursor.fetchall()}
+
+        new_columns = [
+            ("decision_id", "TEXT UNIQUE"),
+            ("prompt_text", "TEXT"),
+            ("embedding", "BLOB"),
+            ("mf_win_rate", "REAL"),
+            ("outcome_status", "TEXT DEFAULT 'pending'"),
+            ("outcome_latency_ms", "REAL"),
+            ("outcome_input_tokens", "INTEGER"),
+            ("outcome_output_tokens", "INTEGER"),
+            ("outcome_cost_usd", "REAL"),
+            ("outcome_error", "TEXT"),
+            ("outcome_timestamp", "REAL"),
+            ("escalated_from_id", "TEXT"),
+            ("pair_label", "TEXT"),
+        ]
+        for col_name, col_def in new_columns:
+            if col_name not in existing_cols:
+                try:
+                    await self._db.execute(
+                        f"ALTER TABLE routing_decisions ADD COLUMN {col_name} {col_def}"
+                    )
+                except Exception:
+                    pass  # column already exists in a concurrent migration
+
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_routing_decision_id
+            ON routing_decisions(decision_id)
+        """)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_routing_pair_label
+            ON routing_decisions(pair_label)
+        """)
+        await self._db.commit()
         logger.info("RoutingStore initialized: %s", self._db_path)
 
-    async def record_decision(self, decision_dict: Dict[str, Any]) -> None:
+    async def record_decision(
+        self,
+        decision_dict: Dict[str, Any],
+        *,
+        prompt_text: str = "",
+        embedding_bytes: bytes = b"",
+        mf_win_rate: Optional[float] = None,
+    ) -> Optional[str]:
         """Persist a routing decision.
 
         Args:
             decision_dict: Serialised RoutingDecision (from dataclasses.asdict).
+            prompt_text: Last user message for training pair extraction.
+            embedding_bytes: Pre-computed embedding as raw bytes (numpy.tobytes()).
+            mf_win_rate: MF Router predicted win rate.
+
+        Returns:
+            The generated decision_id (16-char hex), or None if DB is unavailable.
         """
         if not self._db:
-            return
+            return None
+
+        decision_id = uuid.uuid4().hex[:16]
+
         await self._db.execute(
             """
             INSERT INTO routing_decisions
             (timestamp, conversation_id, task_type, coding_subtask, complexity,
-             target, model, reason, confidence, was_escalated, session_pinned, tier)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             target, model, reason, confidence, was_escalated, session_pinned, tier,
+             decision_id, prompt_text, embedding, mf_win_rate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 decision_dict.get("timestamp", time.time()),
@@ -94,9 +152,187 @@ class RoutingStore:
                 int(decision_dict.get("was_escalated", False)),
                 int(decision_dict.get("session_pinned", False)),
                 decision_dict.get("tier", 1),
+                decision_id,
+                prompt_text,
+                embedding_bytes if embedding_bytes else None,
+                mf_win_rate,
             ),
         )
         await self._db.commit()
+        return decision_id
+
+    async def record_outcome(
+        self,
+        decision_id: str,
+        status: str = "success",
+        latency_ms: float = 0.0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cost_usd: float = 0.0,
+        error: str = "",
+    ) -> None:
+        """Attach outcome feedback to an existing routing decision.
+
+        Args:
+            decision_id: The decision_id returned by record_decision().
+            status: One of 'success', 'error', 'timeout'.
+            latency_ms: End-to-end latency in milliseconds.
+            input_tokens: Number of input tokens consumed.
+            output_tokens: Number of output tokens generated.
+            cost_usd: Actual cost in USD.
+            error: Error message (empty string if success).
+        """
+        if not self._db:
+            return
+        await self._db.execute(
+            """
+            UPDATE routing_decisions
+            SET outcome_status = ?,
+                outcome_latency_ms = ?,
+                outcome_input_tokens = ?,
+                outcome_output_tokens = ?,
+                outcome_cost_usd = ?,
+                outcome_error = ?,
+                outcome_timestamp = ?
+            WHERE decision_id = ?
+            """,
+            (
+                status,
+                latency_ms,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+                error,
+                time.time(),
+                decision_id,
+            ),
+        )
+        await self._db.commit()
+
+    async def record_escalation(
+        self, original_decision_id: str, escalated_decision_id: str
+    ) -> None:
+        """Link an escalation to its original routing decision.
+
+        Sets escalated_from_id on the escalated row and marks the original
+        row with pair_label='strong_wins' (the weak model was not enough).
+
+        Args:
+            original_decision_id: decision_id of the first (weak) attempt.
+            escalated_decision_id: decision_id of the escalated (strong) attempt.
+        """
+        if not self._db:
+            return
+        await self._db.execute(
+            """
+            UPDATE routing_decisions
+            SET escalated_from_id = ?
+            WHERE decision_id = ?
+            """,
+            (original_decision_id, escalated_decision_id),
+        )
+        await self._db.execute(
+            """
+            UPDATE routing_decisions
+            SET pair_label = 'strong_wins'
+            WHERE decision_id = ?
+            """,
+            (original_decision_id,),
+        )
+        await self._db.commit()
+
+    async def get_training_pairs(
+        self, since_timestamp: float = 0, limit: int = 10000
+    ) -> List[Dict[str, Any]]:
+        """Retrieve labeled training pairs for incremental MF Router training.
+
+        Args:
+            since_timestamp: Only return rows with timestamp greater than this.
+            limit: Maximum number of rows to return.
+
+        Returns:
+            List of dicts with decision_id, prompt_text, embedding (raw bytes),
+            mf_win_rate, target, model, pair_label, outcome_status.
+        """
+        if not self._db:
+            return []
+        cursor = await self._db.execute(
+            """
+            SELECT decision_id, prompt_text, embedding, mf_win_rate,
+                   target, model, pair_label, outcome_status
+            FROM routing_decisions
+            WHERE pair_label IS NOT NULL
+              AND embedding IS NOT NULL
+              AND length(embedding) > 0
+              AND timestamp > ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (since_timestamp, limit),
+        )
+        rows = await cursor.fetchall()
+        return [
+            {
+                "decision_id": row[0],
+                "prompt_text": row[1],
+                "embedding": row[2],
+                "mf_win_rate": row[3],
+                "target": row[4],
+                "model": row[5],
+                "pair_label": row[6],
+                "outcome_status": row[7],
+            }
+            for row in rows
+        ]
+
+    async def get_training_stats(self) -> Dict[str, Any]:
+        """Return summary statistics for the training feedback store.
+
+        Returns:
+            Dict with total_decisions, with_outcomes, with_embeddings,
+            labeled_pairs (per-label counts), oldest_labeled, newest_labeled.
+        """
+        if not self._db:
+            return {}
+
+        cursor = await self._db.execute(
+            "SELECT COUNT(*) FROM routing_decisions"
+        )
+        total_decisions = (await cursor.fetchone())[0]
+
+        cursor = await self._db.execute(
+            "SELECT COUNT(*) FROM routing_decisions WHERE outcome_status != 'pending'"
+        )
+        with_outcomes = (await cursor.fetchone())[0]
+
+        cursor = await self._db.execute(
+            "SELECT COUNT(*) FROM routing_decisions "
+            "WHERE embedding IS NOT NULL AND length(embedding) > 0"
+        )
+        with_embeddings = (await cursor.fetchone())[0]
+
+        cursor = await self._db.execute(
+            "SELECT pair_label, COUNT(*) FROM routing_decisions "
+            "WHERE pair_label IS NOT NULL GROUP BY pair_label"
+        )
+        labeled_pairs = {row[0]: row[1] for row in await cursor.fetchall()}
+
+        cursor = await self._db.execute(
+            "SELECT MIN(timestamp), MAX(timestamp) FROM routing_decisions "
+            "WHERE pair_label IS NOT NULL"
+        )
+        ts_row = await cursor.fetchone()
+        oldest_labeled = ts_row[0] if ts_row else None
+        newest_labeled = ts_row[1] if ts_row else None
+
+        return {
+            "total_decisions": total_decisions,
+            "with_outcomes": with_outcomes,
+            "with_embeddings": with_embeddings,
+            "labeled_pairs": labeled_pairs,
+            "oldest_labeled": oldest_labeled,
+            "newest_labeled": newest_labeled,
+        }
 
     async def get_analytics(self, hours: float = 24.0) -> Dict[str, Any]:
         """Return aggregated routing analytics for the given time window.

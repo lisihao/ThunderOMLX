@@ -434,6 +434,74 @@ class MFRouter:
 
         return float(win_rate)
 
+    async def predict_with_embedding(
+        self, prompt: str
+    ) -> Tuple[float, Optional[np.ndarray]]:
+        """Predict win-rate and also return the embedding vector.
+
+        Same as predict() but additionally returns the raw embedding
+        for persistence/training. The embedding is cached internally.
+
+        Args:
+            prompt: User message text.
+
+        Returns:
+            (win_rate, embedding) where embedding is a 1-D float32 array
+            of shape (embed_dim,), or (0.5, None) on any error.
+        """
+        if not self._available:
+            return 0.5, None
+
+        if not prompt or not prompt.strip():
+            return 0.5, None
+
+        t0 = time.monotonic()
+
+        # Step 1: Get prompt embedding (from cache or API)
+        embedding = await self._get_embedding(prompt)
+        if embedding is None:
+            self._api_errors += 1
+            return 0.5, None
+
+        # Step 2: Forward pass (pure numpy, <0.1ms)
+        prompt_proj = self._text_proj @ embedding
+
+        logit_strong = float(
+            (self._classifier @ (self._embed_strong * prompt_proj)).item()
+        )
+        logit_weak = float(
+            (self._classifier @ (self._embed_weak * prompt_proj)).item()
+        )
+
+        diff = logit_strong - logit_weak
+        diff = float(np.clip(diff, -_LOGIT_CLIP, _LOGIT_CLIP))
+        win_rate = 1.0 / (1.0 + np.exp(-diff))
+
+        elapsed_ms = (time.monotonic() - t0) * 1000
+
+        # Update statistics
+        self._total_predictions += 1
+        if win_rate > self._threshold:
+            self._cloud_predictions += 1
+        alpha = 0.1
+        self._avg_latency_ms = (
+            alpha * elapsed_ms + (1 - alpha) * self._avg_latency_ms
+        )
+
+        logger.debug(
+            "[predict_with_embedding] win_rate=%.4f threshold=%.2f -> %s | "
+            "logit_s=%.4f logit_w=%.4f diff=%.4f | latency=%.1fms",
+            win_rate,
+            self._threshold,
+            "CLOUD" if win_rate > self._threshold else "LOCAL",
+            logit_strong,
+            logit_weak,
+            diff,
+            elapsed_ms,
+        )
+
+        return float(win_rate), embedding
+
     async def should_route_to_cloud(self, prompt: str) -> Tuple[bool, float]:
         """Determine if a prompt should be routed to cloud.
 
@@ -475,6 +543,114 @@ class MFRouter:
             "cache_max": self._cache_max,
             "available": self._available,
         }
+
+    def hot_reload_checkpoint(self, checkpoint_path: str) -> bool:
+        """Hot-reload MF Router weights from a new checkpoint.
+
+        Replaces P, text_proj, classifier weights in-place.
+        Clears the embedding cache. Does NOT require server restart.
+
+        Args:
+            checkpoint_path: Path to new safetensors file.
+
+        Returns:
+            True if reload succeeded, False on error.
+        """
+        try:
+            path = Path(checkpoint_path)
+            if not path.exists():
+                logger.error(
+                    "[hot_reload_checkpoint] checkpoint not found: %s",
+                    checkpoint_path,
+                )
+                return False
+
+            from safetensors.numpy import load_file
+
+            tensors = load_file(str(path))
+
+            # Validate expected tensors
+            required_keys = {
+                "P.weight",
+                "text_proj.0.weight",
+                "classifier.0.weight",
+            }
+            missing = required_keys - set(tensors.keys())
+            if missing:
+                logger.error(
+                    "[hot_reload_checkpoint] missing tensors: %s", missing
+                )
+                return False
+
+            new_P = tensors["P.weight"]
+            new_text_proj = tensors["text_proj.0.weight"]
+            new_classifier = tensors["classifier.0.weight"]
+
+            # Validate shapes match current dimensions
+            if new_P.shape != self._P.shape:
+                logger.error(
+                    "[hot_reload_checkpoint] P.weight shape mismatch: "
+                    "current=%s new=%s",
+                    self._P.shape,
+                    new_P.shape,
+                )
+                return False
+
+            if new_text_proj.shape != self._text_proj.shape:
+                logger.error(
+                    "[hot_reload_checkpoint] text_proj shape mismatch: "
+                    "current=%s new=%s",
+                    self._text_proj.shape,
+                    new_text_proj.shape,
+                )
+                return False
+
+            if new_classifier.shape != self._classifier.shape:
+                logger.error(
+                    "[hot_reload_checkpoint] classifier shape mismatch: "
+                    "current=%s new=%s",
+                    self._classifier.shape,
+                    new_classifier.shape,
+                )
+                return False
+
+            # Replace weights
+            self._P = new_P
+            self._text_proj = new_text_proj
+            self._classifier = new_classifier
+
+            # Recompute L2-normalized model embeddings
+            self._embed_strong = self._l2_normalize(
+                self._P[self._strong_id].copy()
+            )
+            self._embed_weak = self._l2_normalize(
+                self._P[self._weak_id].copy()
+            )
+
+            # Clear embedding cache
+            self._embedding_cache.clear()
+            self._cache_order.clear()
+
+            # Reset stats counters
+            self._total_predictions = 0
+            self._cloud_predictions = 0
+            self._avg_latency_ms = 0.0
+            self._api_errors = 0
+
+            logger.info(
+                "[hot_reload_checkpoint] weights reloaded from %s | "
+                "P_shape=%s | embed_dim=%d | cache cleared",
+                checkpoint_path,
+                self._P.shape,
+                self._embedding_dim,
+            )
+            return True
+
+        except Exception as exc:
+            logger.error(
+                "[hot_reload_checkpoint] failed to reload: %s", exc
+            )
+            return False
 
     # ------------------------------------------------------------------
     # Embedding retrieval (OpenAI / Gemini API + LRU cache)

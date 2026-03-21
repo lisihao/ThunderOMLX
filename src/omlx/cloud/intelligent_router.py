@@ -54,6 +54,7 @@ class RoutingDecision:
     task_type: str = ""
     coding_subtask: str = ""
     complexity: str = ""
+    decision_id: str = ""   # UUID from RoutingStore, set after record
     timestamp: float = field(default_factory=time.time)
 
 
@@ -180,6 +181,11 @@ class IntelligentRouter:
         self._routing_log: List[RoutingDecision] = []
         self._max_log_size: int = 1000
 
+        # Transient state for MF Router feedback loop
+        self._last_mf_embedding: Any = None       # np.ndarray or None
+        self._last_mf_win_rate: Optional[float] = None
+        self._last_prompt_text: str = ""
+
         # Confidence checker for cascade escalation (Phase 2)
         self._confidence_checker = ConfidenceChecker()
 
@@ -248,6 +254,14 @@ class IntelligentRouter:
 
         # 6. Session Pin
         decision = self._check_session_pin(decision, conversation_id)
+
+        # 6.5. Extract prompt text for persistence
+        last_user_text = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user_text = msg.get("content", "")
+                break
+        self._last_prompt_text = last_user_text
 
         # 7. Record and log
         self._record_decision(decision)
@@ -403,11 +417,91 @@ class IntelligentRouter:
             complexity="high",
         )
         self._record_decision(escalated)
+
+        # Link escalation for preference pair generation
+        if self._routing_store and original.decision_id:
+            import asyncio
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(
+                    self._link_escalation(original.decision_id, escalated)
+                )
+            except RuntimeError:
+                pass
+
         logger.info(
             "[escalate] %s -> %s (reason: %s)",
             original.model, escalated.model, escalated.reason,
         )
         return escalated
+
+    async def _link_escalation(
+        self,
+        original_id: str,
+        escalated_decision: RoutingDecision,
+        delay: float = 0.5,
+    ) -> None:
+        """Link escalation after the escalated decision_id is available.
+
+        A short delay allows :meth:`_persist_decision` to complete and
+        populate ``escalated_decision.decision_id`` before we read it.
+
+        Args:
+            original_id: The original routing decision's UUID.
+            escalated_decision: The escalated RoutingDecision (mutable).
+            delay: Seconds to wait for decision_id to be set.
+        """
+        import asyncio
+
+        await asyncio.sleep(delay)
+        esc_id = escalated_decision.decision_id
+        if original_id and esc_id:
+            try:
+                await self._routing_store.record_escalation(
+                    original_id, esc_id
+                )
+            except Exception as exc:
+                logger.warning("[_link_escalation] error: %s", exc)
+
+    async def record_outcome(
+        self,
+        decision_id: str,
+        status: str = "success",
+        latency_ms: float = 0.0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cost_usd: float = 0.0,
+        error: str = "",
+    ) -> None:
+        """Record execution outcome for a routing decision.
+
+        Called by server.py after model execution completes.
+        Delegates to :meth:`RoutingStore.record_outcome`.
+
+        Args:
+            decision_id: The UUID returned by :meth:`RoutingStore.record_decision`.
+            status: Outcome status (``"success"``, ``"error"``, ``"timeout"``).
+            latency_ms: End-to-end latency in milliseconds.
+            input_tokens: Number of input tokens consumed.
+            output_tokens: Number of output tokens generated.
+            cost_usd: Estimated cost in USD.
+            error: Error message if status is not success.
+        """
+        if not self._routing_store or not decision_id:
+            return
+        try:
+            await self._routing_store.record_outcome(
+                decision_id=decision_id,
+                status=status,
+                latency_ms=latency_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
+                error=error,
+            )
+        except Exception as exc:
+            logger.warning("[record_outcome] error: %s", exc)
 
     def analyze_confidence(self, logprobs: list) -> dict:
         """Return detailed confidence analysis for debugging/monitoring.
@@ -551,21 +645,27 @@ class IntelligentRouter:
             return decision
 
         try:
-            should_cloud, win_rate = await self._mf_router.should_route_to_cloud(
+            win_rate, embedding = await self._mf_router.predict_with_embedding(
                 last_user
             )
+            should_cloud = win_rate > self._mf_router.threshold
         except Exception as exc:
             logger.warning("[_mf_router_refine] MF Router error: %s", exc)
             return decision
 
+        # Store for _persist_decision to access
+        self._last_mf_embedding = embedding
+        self._last_mf_win_rate = win_rate
+
         logger.info(
             "[_mf_router_refine] win_rate=%.4f threshold=%.2f "
-            "mf_says=%s | current=%s/%s",
+            "mf_says=%s | current=%s/%s embedding=%s",
             win_rate,
             self._mf_router.threshold,
             "CLOUD" if should_cloud else "LOCAL",
             decision.target.value,
             decision.model,
+            "yes" if embedding is not None else "no",
         )
 
         # Case 1: MF says CLOUD but rule says LOCAL
@@ -1111,7 +1211,44 @@ class IntelligentRouter:
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(
-                    self._routing_store.record_decision(asdict(decision))
+                    self._persist_decision(decision, asdict(decision))
                 )
             except RuntimeError:
                 pass  # No running event loop
+
+    async def _persist_decision(
+        self,
+        decision: RoutingDecision,
+        decision_dict: Dict[str, Any],
+    ) -> None:
+        """Persist decision to routing store and capture decision_id.
+
+        Extracts the transient MF Router state (embedding, win_rate,
+        prompt text) and passes it to :meth:`RoutingStore.record_decision`
+        for training-pair persistence.
+
+        Args:
+            decision: Live RoutingDecision object (mutated with decision_id).
+            decision_dict: Serialised copy for SQLite storage.
+        """
+        prompt_text = getattr(self, "_last_prompt_text", "") or ""
+        embedding = getattr(self, "_last_mf_embedding", None)
+        mf_win_rate = getattr(self, "_last_mf_win_rate", None)
+
+        embedding_bytes = b""
+        if embedding is not None:
+            import numpy as np
+
+            embedding_bytes = embedding.astype(np.float32).tobytes()
+
+        try:
+            decision_id = await self._routing_store.record_decision(
+                decision_dict,
+                prompt_text=prompt_text,
+                embedding_bytes=embedding_bytes,
+                mf_win_rate=mf_win_rate,
+            )
+            if decision_id:
+                decision.decision_id = decision_id
+        except Exception as exc:
+            logger.warning("[_persist_decision] error: %s", exc)

@@ -620,6 +620,16 @@ class CloudSettingsV2(BaseModel):
     mf_router_threshold: float = 0.5         # Win rate threshold (higher = more local)
     mf_router_checkpoint: Optional[str] = None  # Path to model.safetensors (auto-detected if None)
 
+    # Incremental Training (MF Router feedback loop)
+    incremental_training_enabled: bool = False       # Collect production data for training
+    incremental_training_embed_persist: bool = True   # Persist embeddings to SQLite
+    incremental_training_mix_ratio: float = 0.3      # Production data ratio (rest = Arena data)
+    incremental_training_min_pairs: int = 100        # Minimum preference pairs before training
+
+    # Auto Training (background scheduler)
+    auto_train_enabled: bool = False                  # Enable background auto-training
+    auto_train_interval_hours: float = 6.0           # Check interval in hours
+
 
 class GlobalSettingsV2(BaseSettings):
     """
