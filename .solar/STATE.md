@@ -1,7 +1,7 @@
 # ThunderOMLX - Mac mini 最强推理引擎
 
-**最后更新**: 2026-03-19 00:30
-**当前阶段**: P2.5 完成 + Profiler 增强完成
+**最后更新**: 2026-03-21
+**当前阶段**: KVTC 集成完成 + 论文发布 + 全部核心优化已完成
 
 ## Mission
 
@@ -75,9 +75,10 @@
 #### ~~Phase 4: Qwen3.5 Hybrid Prefix Cache Reuse 调查~~ — ❌ 废弃
 - 监护人决定废弃，不再调查
 
-#### ~~Phase 2 (原): Cache-Aware Adaptive Chunking~~ — ⏸️ Blocked
-- Blocked on Phase 4 (hybrid prefix cache 修复)
-- Chunker 感知 cache 状态的前提是 prefix cache 能复用
+#### ~~Phase 2 (原): Cache-Aware Adaptive Chunking~~ — ✅ 已通过其他方式实现
+- ContextPilot + Skip Logic + message_boundaries 已实现缓存感知调度
+- scheduler.py 通过 ContextPilot 传递 message_boundaries 到 prefix cache matcher
+- 不再需要独立的 cache-aware chunking phase
 
 ---
 
@@ -483,6 +484,39 @@
 ### In-Progress
 
 (无)
+
+### Done (2026-03-21)
+
+#### ✅ 双语学术论文发布
+
+**任务**: 撰写 ThunderOMLX 完整技术论文（中英文双版本）
+
+**交付**:
+- ✅ `paper/thunderomlx-paper-en.md` — 英文版 (525 行, 9783 words, 45 references)
+- ✅ `paper/thunderomlx-paper-zh.md` — 中文版 (569 行, 10 节技术 + 7 节实验 + 45 references)
+- ✅ README.md 添加论文链接
+- ✅ 推送到 GitHub
+
+**论文覆盖**: 全部 10 项关键技术 (4.1-4.10)，含消融实验 (Table 6-9)
+
+#### ✅ KVTC 自适应压缩 + Admin UI
+
+**任务**: KVTC adaptive compression 支持 + 管理面板配置
+
+**交付**:
+- ✅ `kvtc_adaptive` / `kvtc_threshold` 字段贯穿 scheduler → settings → routes → UI → i18n
+- ✅ 修复 KVTC settings propagation bug (to_scheduler_config 只传 3 字段 → 6 字段)
+- ✅ 5 语言 i18n 更新 (en/zh/ja/ko/zh-TW)
+
+#### ✅ 旧 ContextPilot Phase 3/4 状态清理
+
+**背景**: 上一个会话崩溃时，ContextPilot 开发进度显示 Phase 3 (Deduplication) 和 Phase 4 (Cache-aware Scheduling) 待启动。
+
+**分析结论**: 两个 Phase 已通过后续工作完全实现，无需单独启动：
+- **Deduplication**: `ContextIndex` 类 (adapter.py:72) 实现 hash-based O(1) 去重；`prefix_cache.py` 实现 block-level 去重；`cloud/context_pilot.py` 实现 multi-turn 去重
+- **Cache-aware Scheduling**: scheduler.py:2755-2786 已集成 ContextPilot，传递 `message_boundaries` + `system_prompt_hash` 到 prefix cache matcher，三级 Skip Logic 实现完整缓存感知调度
+
+**状态**: ✅ 已关闭，不再需要
 
 ### Done (2026-03-20)
 
