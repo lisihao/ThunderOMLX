@@ -573,15 +573,20 @@ class _BoundarySnapshotBatchGenerator(BatchGenerator):
         else:
             last_inputs = mx.array([p[-prompt_checkpoint:] for p in inputs])
 
-            # ⚡ P1-2: Skip cache merge and prepare in FULL SKIP mode
-            # In FULL SKIP mode (100% cache hit), the while loop is skipped immediately,
-            # so _merge_caches() and c.prepare() are unnecessary overhead.
-            # Direct use of existing cache saves ~2-3ms per _process_prompts call.
+            # FULL SKIP path: still need _merge_caches to convert KVCache → BatchKVCache.
+            # BatchKVCache provides extract/filter/extend methods required by the
+            # batch processing pipeline (extract_cache on finish, prompt_checkpoint_callback).
+            # Skipping _merge_caches caused 'KVCache has no attribute extract' errors,
+            # triggering cache corruption recovery on every FULL SKIP request (~1.2s penalty).
             if full_skip_mode:
-                # FULL SKIP: Use first request's cache directly (single-request scenario)
-                prompt_cache = caches[0]
-                inputs = last_inputs  # Skip right-padding, use last_inputs directly
-                batched_embeds, batched_extra = None, None  # No VLM in test environment
+                prompt_cache = _merge_caches(caches)
+                for c in prompt_cache:
+                    c.prepare(
+                        lengths=[max(0, l - prompt_checkpoint) for l in lengths],
+                        right_padding=padding,
+                    )
+                inputs = last_inputs
+                batched_embeds, batched_extra = None, None
             else:
                 # Normal incremental path: merge + right-pad + prepare
                 inputs = _right_pad_prompts(inputs, max_length=max_length)
