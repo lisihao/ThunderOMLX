@@ -1,6 +1,6 @@
 ---
 title: "ThunderOMLX: 基于 Apple Silicon 的高性能本地大语言模型推理引擎——智能 KV Cache 管理系统"
-author: "李思浩"
+author: "昊哥"
 date: "2026年3月"
 lang: zh-CN
 abstract: |
